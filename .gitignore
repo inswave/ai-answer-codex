@@ -1,0 +1,17 @@
+node_modules/
+
+data/
+logs/
+*.log
+npm-debug.log*
+
+config/config.json
+.env
+.env.*
+
+__pycache__/
+*.pyc
+.pytest_cache/
+
+.DS_Store
+Thumbs.db

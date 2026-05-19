@@ -1,0 +1,222 @@
+const { maskSensitiveInfo } = require('../utils/masking');
+
+const DEFAULT_MIN_MATCH = 45;
+const MAX_CONTEXT_CHARS_PER_CASE = 1200;
+
+/**
+ * Python searcher.py 출력 파싱 공용 모듈
+ *
+ * 입력: Python stdout 원본 텍스트
+ * 출력: cases 배열 [{rank, title, source, similarity, match, content}]
+ */
+
+function parseRagResults(output) {
+  if (!output) return [];
+
+  const cases = [];
+  const pattern = /^#(\d+)\s+\[(?:최종|유사도):\s*([\d.]+)[^\]]*\]\s*(.*)$/gm;
+  let match;
+
+  while ((match = pattern.exec(output)) !== null) {
+    const rank = parseInt(match[1], 10);
+    const similarityRaw = parseFloat(match[2]);
+    const source = match[3].trim();
+
+    const startIdx = match.index + match[0].length;
+    const nextMatch = output.indexOf('\n#', startIdx);
+    const block = output.slice(startIdx, nextMatch === -1 ? undefined : nextMatch).trim();
+
+    const lines = block.split('\n');
+    let title = '';
+    let url = '';
+    let attachmentDir = '';
+    let attachments = [];
+    const contentLines = [];
+
+    for (const line of lines) {
+      const trimmed = line.trim();
+      if (trimmed.startsWith('질문:')) {
+        title = trimmed.replace('질문:', '').trim();
+      } else if (trimmed.startsWith('URL:')) {
+        url = trimmed.replace('URL:', '').trim();
+      } else if (trimmed.startsWith('AttachmentDir:')) {
+        attachmentDir = trimmed.replace('AttachmentDir:', '').trim();
+      } else if (trimmed.startsWith('Attachments:')) {
+        try {
+          attachments = JSON.parse(trimmed.replace('Attachments:', '').trim());
+          if (!Array.isArray(attachments)) attachments = [];
+        } catch {
+          attachments = [];
+        }
+      } else if (trimmed.startsWith('답변:')) {
+        contentLines.push(trimmed.replace('답변:', '').trim());
+      } else if (trimmed && trimmed !== '---') {
+        contentLines.push(trimmed);
+      }
+    }
+
+    cases.push({
+      rank,
+      title: title || `사례 ${rank}`,
+      source,
+      similarity: `${(similarityRaw * 100).toFixed(1)}%`,
+      match: Math.round(similarityRaw * 100),
+      url,
+      attachmentDir,
+      attachments,
+      content: contentLines.join('\n').trim() || title,
+    });
+  }
+
+  return cases;
+}
+
+/**
+ * 데이터 소스 → W-Tech type 코드 매핑
+ */
+function getSourceType(source) {
+  if (!source) return 'doc';
+  const lower = source.toLowerCase();
+  if (lower.includes('qna')) return 'board';
+  if (lower.includes('faq')) return 'faq';
+  if (source.includes('Gmail') || source.includes('메일') || source.includes('이메일')) return 'email';
+  if (lower.includes('confluence')) return 'wiki';
+  if (lower.includes('api guide') || source.includes('API 가이드')) return 'api-guide';
+  if (source.includes('릴리즈') || lower.includes('release')) return 'release-note';
+  if (source.includes('가이드') || lower.includes('guide')) return 'guide';
+  return 'doc';
+}
+
+function getSafeSourceTitle(c) {
+  const type = getSourceType(c.source);
+  const labelByType = {
+    board: 'W-Tech QNA 참고 사례',
+    email: '메일 참고 사례',
+    wiki: 'Confluence 참고 문서',
+    faq: 'FAQ 참고 문서',
+    'api-guide': 'API 가이드 참고 문서',
+    'release-note': '릴리즈 노트 참고 문서',
+    guide: '개발 가이드 참고 문서',
+    doc: '참고 문서',
+  };
+
+  return labelByType[type] || '참고 문서';
+}
+
+/**
+ * cases 배열 → W-Tech 표준 sources 구조로 변환
+ * [{title, meta, match, url, type}]
+ *
+ * match: 0-100 정수 (유사도 %)
+ * url: 가능한 경우 원본 링크. 현재 searcher.py가 id/url을 노출 안 해서 빈 문자열.
+ *      추후 indexer/searcher가 metadata에 id+url을 넣으면 채울 수 있음.
+ */
+function toSources(cases) {
+  return cases.map(c => {
+    const out = {
+      title: getSafeSourceTitle(c),
+      meta: maskSensitiveInfo(c.source),
+      match: c.match,
+      url: maskSensitiveInfo(c.url || ''),
+      type: getSourceType(c.source),
+    };
+    // 검증된 개발가이드 샘플만 첨부로 노출한다. Gmail 고객 첨부는 노출하지 않는다.
+    if (isSampleAttachmentCase(c) && Array.isArray(c.attachments) && c.attachments.length > 0) {
+      out.attachments = c.attachments.map((a) => ({
+        filename: maskSensitiveInfo(a.filename || ''),
+        mimeType: a.mimeType || '',
+        size: a.size || 0,
+        // 다운로드 URL: /api/attachment?dir={attachmentDir}&filename={filename}
+        downloadUrl: c.attachmentDir
+          ? `/api/attachment?dir=${encodeURIComponent(c.attachmentDir)}&filename=${encodeURIComponent(a.filename)}`
+          : '',
+      }));
+    }
+    return out;
+  });
+}
+
+function isSampleAttachmentCase(c) {
+  return typeof c.attachmentDir === 'string'
+    && c.attachmentDir.replace(/\\/g, '/').startsWith('dev-guide-sample/');
+}
+
+function toSampleFiles(cases) {
+  if (!Array.isArray(cases)) return [];
+
+  const seen = new Set();
+  const files = [];
+
+  for (const c of cases) {
+    if (!isSampleAttachmentCase(c) || !Array.isArray(c.attachments)) continue;
+
+    for (const a of c.attachments) {
+      if (!a || !a.filename) continue;
+
+      const key = `${c.attachmentDir}/${a.filename}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+
+      files.push({
+        filename: a.filename,
+        mimeType: a.mimeType || '',
+        size: a.size || 0,
+        sourceTitle: getSafeSourceTitle(c),
+        downloadUrl: `/api/attachment?dir=${encodeURIComponent(c.attachmentDir)}&filename=${encodeURIComponent(a.filename)}`,
+      });
+    }
+  }
+
+  return files;
+}
+
+function filterRagCases(cases, minMatch = DEFAULT_MIN_MATCH) {
+  if (!Array.isArray(cases)) return [];
+  return cases.filter((c) => Number(c.match || 0) >= minMatch);
+}
+
+function buildRagContext(cases, options = {}) {
+  const minMatch = options.minMatch ?? DEFAULT_MIN_MATCH;
+  const filtered = filterRagCases(cases, minMatch);
+
+  if (filtered.length === 0) {
+    return '';
+  }
+
+  return filtered.map((c) => {
+    const title = getSafeSourceTitle(c);
+    const source = maskSensitiveInfo(c.source || '');
+    const content = maskSensitiveInfo(c.content || '').slice(0, MAX_CONTEXT_CHARS_PER_CASE);
+    return [
+      `--- 참고 사례 [유사도: ${c.match}% | 출처: ${source}] ---`,
+      `질문: ${title}`,
+      `내용: ${content}`,
+    ].join('\n');
+  }).join('\n\n');
+}
+
+/**
+ * 신뢰도 계산 — Top-3 유사도 평균
+ *
+ * @param {Array} cases - parseRagResults 결과
+ * @returns {number} 0~100 정수
+ */
+function calculateConfidence(cases) {
+  if (!cases || cases.length === 0) return 0;
+
+  const top3 = cases.slice(0, 3);
+  const sum = top3.reduce((acc, c) => acc + c.match, 0);
+  return Math.round(sum / top3.length);
+}
+
+module.exports = {
+  parseRagResults,
+  toSources,
+  toSampleFiles,
+  calculateConfidence,
+  getSourceType,
+  getSafeSourceTitle,
+  filterRagCases,
+  buildRagContext,
+  DEFAULT_MIN_MATCH,
+};

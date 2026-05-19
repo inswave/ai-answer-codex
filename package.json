@@ -1,0 +1,40 @@
+{
+  "name": "techassistant",
+  "version": "1.0.0",
+  "description": "AI 기술문의 자동 답변 시스템 - 인스웨이브 WebSquare 기술지원",
+  "main": "src/collectors/index.js",
+  "scripts": {
+    "collect": "node scripts/collect.js",
+    "gmail:auth": "node scripts/gmail-oauth-setup.js",
+    "collect:gmail": "node scripts/collect.js --source gmail",
+    "collect:wtech": "node scripts/collect.js --source wtech",
+    "collect:confluence": "node scripts/collect.js --source confluence",
+    "audit:gmail-attachments": "node scripts/audit_gmail_attachments.js",
+    "audit:gmail-attachments:local": "node scripts/audit_gmail_attachments.js --with-local-map",
+    "eval:search": "node scripts/eval_search_quality.js",
+    "eval:wtech-holdout": "node scripts/build_wtech_eval_set.js",
+    "eval:wtech-latest": "node scripts/eval_collect_latest_wtech.js",
+    "test:answer-policy": "node scripts/test_answer_policy.js",
+    "test:attachment-context": "node scripts/test_attachment_context.js",
+    "classify": "node scripts/classify.js",
+    "index": "${PYTHON_PATH:-./.conda-envs/rag/bin/python3.10} src/rag/indexer.py",
+    "index:reset": "${PYTHON_PATH:-./.conda-envs/rag/bin/python3.10} src/rag/indexer.py --reset",
+    "search": "${PYTHON_PATH:-./.conda-envs/rag/bin/python3.10} src/rag/searcher.py",
+    "answer": "node scripts/answer.js",
+    "pipeline": "npm run collect && npm run classify && npm run index",
+    "server": "node src/api/server.js"
+  },
+  "dependencies": {
+    "cheerio": "^1.2.0",
+    "cors": "^2.8.6",
+    "express": "^5.2.1",
+    "googleapis": "^171.4.0",
+    "imap": "^0.8.19",
+    "mailparser": "^3.7.1",
+    "node-fetch": "^2.7.0",
+    "puppeteer": "^23.0.0"
+  },
+  "engines": {
+    "node": ">=16.0.0"
+  }
+}

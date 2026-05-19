@@ -1,0 +1,5 @@
+# RAG 벡터 검색 모듈 (Python)
+chromadb>=0.5.0
+sentence-transformers>=3.0.0
+torch>=2.0.0
+rank-bm25>=0.2.2
