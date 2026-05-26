@@ -10,6 +10,7 @@ const { execFileSync } = require('child_process');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
+const { loadConfig } = require('../utils/config');
 const { resolvePythonPath } = require('../utils/pythonPath');
 
 const API_PATTERNS = [
@@ -41,24 +42,77 @@ const EXCLUDE_LIST = new Set([
   'textContent', 'innerHTML', 'fontWeight', 'fontSize', 'marginLeft',
   'backgroundColor', 'borderColor', 'textColor', 'borderBottom',
   'LocalStorage', 'localStorage', 'sessionStorage', 'WebSquare',
-  'gridView', 'dataList', 'dataMap', 'true', 'false',
+  'gridView', 'dataList', 'dataMap', 'true', 'false', 'null', 'undefined',
 ]);
+
+const DEFAULT_DOC_EXTENSIONS = new Set(['.html', '.htm', '.xml']);
+const DEFAULT_MAX_FILE_BYTES = 2 * 1024 * 1024;
+
+function escapeRegExp(value) {
+  return String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function collectDeclaredUserNames(text) {
+  const declared = new Set();
+  const source = String(text || '');
+  const patterns = [
+    /\bfunction\s+([A-Za-z_$][\w$]*)\s*\(/g,
+    /\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\b/g,
+    /\bscwin\.([A-Za-z_$][\w$]*)\s*=/g,
+    /\bscwin\.([A-Za-z_$][\w$]*)\s*=\s*function\b/g,
+    /\b([A-Za-z_$][\w$]*)\s*[:=]\s*function\s*\(/g,
+  ];
+
+  for (const pattern of patterns) {
+    let match;
+    while ((match = pattern.exec(source)) !== null) {
+      declared.add(match[1]);
+    }
+  }
+
+  return declared;
+}
+
+function normalizeCandidateName(name, declaredNames) {
+  const value = String(name || '').replace(/\(\)$/, '');
+  if (!value) return '';
+  if (/^fn_[A-Za-z0-9_]+$/.test(value)) return '';
+  if (/^[a-z][A-Za-z0-9]*_[A-Za-z0-9_]+$/.test(value)) return '';
+  if (declaredNames.has(value)) return '';
+
+  const parts = value.split('.');
+  if (parts.length > 1) {
+    const first = parts[0];
+    const last = parts[parts.length - 1];
+
+    if (declaredNames.has(last)) return '';
+    if (EXCLUDE_LIST.has(first)) return last;
+    if (first === '$p' || declaredNames.has(first)) return last;
+  }
+
+  return value;
+}
 
 class ApiVerifier {
   constructor() {
     this.searcherPath = path.join(__dirname, '../rag/searcher.py');
     this.pythonPath = resolvePythonPath();
+    const config = loadConfig();
+    this.localDocConfig = config.apiVerifier || {};
+    this.apiGuideConfig = config.apiGuide || {};
+    this.localDocIndex = null;
   }
 
   extractApiNames(answerText, options = {}) {
     const found = new Set();
     const patterns = options.includeProseTerms ? QUESTION_PATTERNS : API_PATTERNS;
+    const declaredNames = collectDeclaredUserNames(answerText);
 
     for (const pattern of patterns) {
       const regex = new RegExp(pattern.source, pattern.flags);
       let match;
       while ((match = regex.exec(answerText || '')) !== null) {
-        const name = String(match[1] || '').replace(/\(\)$/, '');
+        const name = normalizeCandidateName(match[1], declaredNames);
         if (name.length >= 4 && !EXCLUDE_LIST.has(name)) {
           found.add(name);
         }
@@ -76,6 +130,10 @@ class ApiVerifier {
   verifyBatch(apiNames) {
     const names = [...new Set(apiNames || [])].filter(Boolean);
     if (names.length === 0) return [];
+
+    const localResults = this.verifyBatchInLocalDocs(names);
+    const localByName = new Map(localResults.map((item) => [item.name, item]));
+    const hasAuthoritativeLocalDocs = this.hasLocalDocs();
 
     const scriptPath = path.join(os.tmpdir(), `techassistant-verify-${process.pid}-${Date.now()}.py`);
 
@@ -121,16 +179,151 @@ print('VERIFY_RESULT:' + json.dumps(results, ensure_ascii=False))
       const lines = output.trim().split('\n');
       for (const line of lines) {
         if (line.startsWith('VERIFY_RESULT:')) {
-          return JSON.parse(line.substring('VERIFY_RESULT:'.length));
+          const ragResults = JSON.parse(line.substring('VERIFY_RESULT:'.length));
+          return this.mergeVerificationResults(names, ragResults, localByName, hasAuthoritativeLocalDocs);
         }
       }
-      return names.map(name => ({ name, found: false, error: 'parse_failed' }));
+      return this.mergeVerificationResults(
+        names,
+        names.map(name => ({ name, found: false, error: 'parse_failed' })),
+        localByName,
+        hasAuthoritativeLocalDocs
+      );
     } catch (err) {
       console.warn('[API verifier] batch verification failed:', err.message);
-      return names.map(name => ({ name, found: false, error: err.message }));
+      return this.mergeVerificationResults(
+        names,
+        names.map(name => ({ name, found: false, error: err.message })),
+        localByName,
+        hasAuthoritativeLocalDocs
+      );
     } finally {
       try { fs.unlinkSync(scriptPath); } catch {}
     }
+  }
+
+  mergeVerificationResults(names, ragResults, localByName, hasAuthoritativeLocalDocs) {
+    const ragByName = new Map((ragResults || []).map((item) => [item.name, item]));
+
+    return names.map((name) => {
+      const local = localByName.get(name);
+      const rag = ragByName.get(name) || { name, found: false };
+
+      if (local?.found) {
+        return {
+          ...rag,
+          name,
+          found: true,
+          source: local.source,
+          sourceType: 'local-docs',
+          matchedFile: local.matchedFile,
+          ragFound: !!rag.found,
+        };
+      }
+
+      if (hasAuthoritativeLocalDocs) {
+        return {
+          ...rag,
+          name,
+          found: false,
+          source: rag.source,
+          sourceType: rag.found ? 'rag-only' : 'none',
+          error: rag.error,
+        };
+      }
+
+      return {
+        ...rag,
+        name,
+        sourceType: rag.found ? 'rag' : 'none',
+      };
+    });
+  }
+
+  hasLocalDocs() {
+    return this.getLocalDocIndex().length > 0;
+  }
+
+  getLocalDocDirs() {
+    const dirs = [];
+    const configured = this.localDocConfig.sourceDirs || this.localDocConfig.sourceDir;
+    if (Array.isArray(configured)) dirs.push(...configured);
+    else if (configured) dirs.push(configured);
+    if (this.apiGuideConfig.sourceDir) dirs.push(this.apiGuideConfig.sourceDir);
+
+    return [...new Set(dirs)]
+      .map((dir) => path.isAbsolute(dir) ? dir : path.join(__dirname, '../..', dir))
+      .filter((dir) => {
+        try {
+          return fs.existsSync(dir) && fs.statSync(dir).isDirectory();
+        } catch (_) {
+          return false;
+        }
+      });
+  }
+
+  getLocalDocIndex() {
+    if (this.localDocIndex) return this.localDocIndex;
+
+    const extensions = new Set(
+      (this.localDocConfig.extensions || [...DEFAULT_DOC_EXTENSIONS])
+        .map((ext) => ext.startsWith('.') ? ext.toLowerCase() : `.${ext.toLowerCase()}`)
+    );
+    const maxBytes = Number(this.localDocConfig.maxFileBytes || DEFAULT_MAX_FILE_BYTES);
+    const files = [];
+
+    const visit = (dir) => {
+      let entries = [];
+      try {
+        entries = fs.readdirSync(dir, { withFileTypes: true });
+      } catch (_) {
+        return;
+      }
+
+      for (const entry of entries) {
+        const fullPath = path.join(dir, entry.name);
+        if (entry.isDirectory()) {
+          visit(fullPath);
+          continue;
+        }
+        if (!entry.isFile() || !extensions.has(path.extname(entry.name).toLowerCase())) continue;
+
+        try {
+          const stat = fs.statSync(fullPath);
+          if (stat.size > maxBytes) continue;
+          files.push({
+            path: fullPath,
+            text: fs.readFileSync(fullPath, 'utf8'),
+          });
+        } catch (_) {
+          // Skip unreadable docs.
+        }
+      }
+    };
+
+    for (const dir of this.getLocalDocDirs()) visit(dir);
+    this.localDocIndex = files;
+    return this.localDocIndex;
+  }
+
+  verifyBatchInLocalDocs(apiNames) {
+    const docs = this.getLocalDocIndex();
+    if (docs.length === 0) {
+      return apiNames.map((name) => ({ name, found: false }));
+    }
+
+    return apiNames.map((name) => {
+      const pattern = new RegExp(`(^|[^A-Za-z0-9_$])${escapeRegExp(name)}([^A-Za-z0-9_$]|$)`);
+      const match = docs.find((doc) => pattern.test(doc.text));
+      if (!match) return { name, found: false };
+
+      return {
+        name,
+        found: true,
+        source: path.relative(path.join(__dirname, '../..'), match.path),
+        matchedFile: match.path,
+      };
+    });
   }
 
   verify(answerText) {

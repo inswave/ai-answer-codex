@@ -38,6 +38,11 @@ for (const { input, expected } of cases) {
   assert.strictEqual(maskSensitiveInfo(input), expected);
 }
 
+assert.strictEqual(
+  maskSensitiveInfo('options.fileName = "sample.xlsx";', { maskFilenames: false }),
+  'options.fileName = "sample.xlsx";'
+);
+
 assert.deepStrictEqual(
   maskObjectSensitiveInfo({
     query: '회사명/프로젝트명 가상은행 차세대 시스템 구축',

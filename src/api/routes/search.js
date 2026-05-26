@@ -17,6 +17,7 @@ const {
   calculateConfidence,
   filterRagCases,
 } = require('../../rag/parseRagResults');
+const { findSampleFiles, mergeSampleFiles, shouldIncludeSampleFiles } = require('../../rag/sampleMatcher');
 const { sanitize } = require('../../utils/sanitize');
 
 const router = express.Router();
@@ -47,6 +48,17 @@ function buildAnswer(cases, query) {
   return `"${query}"에 대해 유사 사례 ${cases.length}건을 찾았습니다.\n\n상위 사례:\n${top}\n\n자세한 내용은 sources를 참고하세요.`;
 }
 
+function buildVisibleSampleFiles(query, cases) {
+  if (!shouldIncludeSampleFiles(query)) return [];
+  return mergeSampleFiles(findSampleFiles(query, cases), toSampleFiles(cases), 2);
+}
+
+function buildVisibleSources(query, cases) {
+  return toSources(cases, {
+    includeAttachments: shouldIncludeSampleFiles(query),
+  });
+}
+
 // POST /api/search — 통일 스펙
 router.post('/', (req, res) => {
   const { query: rawQuery, topK, context, categoryFilter } = req.body;
@@ -61,11 +73,12 @@ router.post('/', (req, res) => {
 
   try {
     const cases = runSearch(query, topK, categoryFilter);
+    const sampleFiles = buildVisibleSampleFiles(query, cases);
     res.json({
       answer: buildAnswer(cases, query),
       confidence: calculateConfidence(cases),
-      sources: toSources(cases),
-      sampleFiles: toSampleFiles(cases),
+      sources: buildVisibleSources(query, cases),
+      sampleFiles,
     });
   } catch (err) {
     console.error('[API /search] 실패:', err.message);
@@ -95,13 +108,14 @@ router.post('/raw', (req, res) => {
 
     const rawCases = parseRagResults(output);
     const cases = filterRagCases(rawCases);
+    const sampleFiles = buildVisibleSampleFiles(query, cases);
     res.json({
       query,
       classification,
       resultCount: cases.length,
       rawResultCount: rawCases.length,
       cases,
-      sampleFiles: toSampleFiles(cases),
+      sampleFiles,
       rawCases,
       rawContext: output,
     });

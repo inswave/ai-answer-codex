@@ -14,10 +14,23 @@ const {
   calculateConfidence,
   filterRagCases,
 } = require('../../rag/parseRagResults');
+const { findSampleFiles, mergeSampleFiles, shouldIncludeSampleFiles } = require('../../rag/sampleMatcher');
 const { sanitize } = require('../../utils/sanitize');
 
 const router = express.Router();
 const pipeline = new AnswerPipeline();
+const MAX_VISIBLE_SOURCES = 3;
+
+function toVisibleSources(query, cases) {
+  return toSources(cases, {
+    includeAttachments: shouldIncludeSampleFiles(query),
+  }).slice(0, MAX_VISIBLE_SOURCES);
+}
+
+function buildVisibleSampleFiles(query, cases) {
+  if (!shouldIncludeSampleFiles(query)) return [];
+  return mergeSampleFiles(findSampleFiles(query, cases), toSampleFiles(cases), 2);
+}
 
 // POST /api/answer — 통일 스펙
 router.post('/', async (req, res) => {
@@ -44,8 +57,8 @@ router.post('/', async (req, res) => {
     res.json({
       answer: result.answer || '',
       confidence: calculateConfidence(cases),
-      sources: toSources(cases),
-      sampleFiles: toSampleFiles(cases),
+      sources: toVisibleSources(query, cases),
+      sampleFiles: buildVisibleSampleFiles(query, cases),
       mcp: {
         enabled: !!result.mcpContext?.enabled,
         available: !!result.mcpContext?.available,
@@ -69,24 +82,25 @@ router.post('/follow-up', async (req, res) => {
   const { originalQuestion, previousAnswer, followUp, topK, context, attachments } = req.body;
   const version = (context && context.engineVersion) || req.body.version;
 
-  if (!originalQuestion || !previousAnswer || !followUp) {
+  if (!originalQuestion || !followUp) {
     return res.status(400).json({
-      error: 'originalQuestion, previousAnswer, followUp 모두 필요합니다.',
+      error: 'originalQuestion, followUp 모두 필요합니다.',
     });
   }
 
   try {
     const result = await pipeline.processFollowUp(
-      { originalQuestion, previousAnswer, followUp },
+      { originalQuestion, previousAnswer: previousAnswer || '', followUp },
       { version, topK: topK || 8, attachments }
     );
 
     const cases = filterRagCases(result.ragResults.cases || []);
+    const sampleQuery = sanitize([originalQuestion, followUp].filter(Boolean).join('\n'));
     res.json({
       answer: result.answer || '',
       confidence: calculateConfidence(cases),
-      sources: toSources(cases),
-      sampleFiles: toSampleFiles(cases),
+      sources: toVisibleSources(sampleQuery, cases),
+      sampleFiles: buildVisibleSampleFiles(sampleQuery, cases),
       mcp: {
         enabled: !!result.mcpContext?.enabled,
         available: !!result.mcpContext?.available,
@@ -141,8 +155,8 @@ router.post('/stream', async (req, res) => {
     send('result', {
       answer: result.answer || '',
       confidence: calculateConfidence(cases),
-      sources: toSources(cases),
-      sampleFiles: toSampleFiles(cases),
+      sources: toVisibleSources(query, cases),
+      sampleFiles: buildVisibleSampleFiles(query, cases),
       mcp: {
         enabled: !!result.mcpContext?.enabled,
         available: !!result.mcpContext?.available,

@@ -6,7 +6,7 @@ const MAX_ATTACHMENT_CHARS = 8000;
 const MAX_TOTAL_CHARS = 16000;
 
 const TEXT_EXTENSIONS = new Set(['.xml', '.js', '.css', '.html', '.htm', '.txt', '.md']);
-const IMAGE_META_EXTENSIONS = new Set(['.png']);
+const IMAGE_META_EXTENSIONS = new Set(['.png', '.jpg', '.jpeg', '.gif', '.bmp', '.webp', '.svg']);
 const BLOCKED_EXTENSIONS = new Set([
   '.zip', '.exe', '.bat', '.cmd', '.sh', '.ps1', '.msi', '.scr', '.com', '.vbs', '.dll',
 ]);
@@ -34,6 +34,12 @@ function getAttachmentText(raw) {
   }
 
   return value;
+}
+
+function hasImagePayload(raw) {
+  const encoding = String(raw?.encoding || '').toLowerCase();
+  const data = raw?.data ?? raw?.content;
+  return encoding === 'base64' && typeof data === 'string' && data.trim().length > 0;
 }
 
 function cleanAttachmentText(rawText, ext) {
@@ -70,14 +76,25 @@ function buildQuestionAttachmentContext(attachments = []) {
       hasAttachments: false,
       context: '',
       policyText: '',
-      summary: { total: 0, byExtension: {}, analyzedTextCount: 0, imageOnlyCount: 0, blockedCount: 0, unsupportedCount: 0 },
+      summary: {
+        total: 0,
+        byExtension: {},
+        analyzedTextCount: 0,
+        imageOnlyCount: 0,
+        imagePayloadCount: 0,
+        imageOcrCount: 0,
+        ocrFailedCount: 0,
+        blockedCount: 0,
+        unsupportedCount: 0,
+      },
       items: [],
     };
   }
 
   const normalized = attachments.map(normalizeAttachment);
   const analyzed = [];
-  const imageOnly = [];
+  const imageItems = [];
+  const imageOcr = [];
   const blocked = [];
   const unsupported = [];
   let totalChars = 0;
@@ -87,6 +104,7 @@ function buildQuestionAttachmentContext(attachments = []) {
     if (risky || BLOCKED_EXTENSIONS.has(item.ext)) {
       blocked.push({
         type: 'blocked',
+        filename: item.filename,
         ext: item.ext,
         size: item.size,
         reason: risky ? 'risky_filename' : 'blocked_extension',
@@ -97,13 +115,13 @@ function buildQuestionAttachmentContext(attachments = []) {
     if (TEXT_EXTENSIONS.has(item.ext)) {
       const rawText = getAttachmentText(item.raw);
       if (!rawText.trim()) {
-        unsupported.push({ type: 'unsupported', ext: item.ext, size: item.size, reason: 'empty_text' });
+        unsupported.push({ type: 'unsupported', filename: item.filename, ext: item.ext, size: item.size, reason: 'empty_text' });
         continue;
       }
 
       const remaining = Math.max(0, MAX_TOTAL_CHARS - totalChars);
       if (remaining === 0) {
-        unsupported.push({ type: 'unsupported', ext: item.ext, size: item.size, reason: 'total_text_limit' });
+        unsupported.push({ type: 'unsupported', filename: item.filename, ext: item.ext, size: item.size, reason: 'total_text_limit' });
         continue;
       }
 
@@ -113,6 +131,7 @@ function buildQuestionAttachmentContext(attachments = []) {
       totalChars += safeText.length;
       analyzed.push({
         type: 'text',
+        filename: item.filename,
         ext: item.ext,
         size: item.size,
         content: safeText,
@@ -122,21 +141,48 @@ function buildQuestionAttachmentContext(attachments = []) {
     }
 
     if (IMAGE_META_EXTENSIONS.has(item.ext)) {
-      imageOnly.push({
-        type: 'image_meta',
+      const hasPayload = hasImagePayload(item.raw);
+      const ocrStatus = String(item.raw?.ocrStatus || '');
+      const ocrText = cleanAttachmentText(item.raw?.ocrText || '', '.txt');
+
+      if (ocrText) {
+        const remaining = Math.max(0, MAX_TOTAL_CHARS - totalChars);
+        const safeText = ocrText.slice(0, Math.min(MAX_ATTACHMENT_CHARS, remaining));
+        totalChars += safeText.length;
+        imageOcr.push({
+          type: 'image_ocr',
+          filename: item.filename,
+          ext: item.ext,
+          size: item.size,
+          mimeType: item.mimeType,
+          hasPayload,
+          ocrStatus: ocrStatus || 'ok',
+          content: safeText,
+          truncated: safeText.length < ocrText.length,
+        });
+      }
+
+      imageItems.push({
+        type: ocrText ? 'image_ocr' : (hasPayload ? 'image_payload' : 'image_meta'),
+        filename: item.filename,
         ext: item.ext,
         size: item.size,
-        reason: 'image_content_not_analyzed',
+        mimeType: item.mimeType,
+        hasPayload,
+        ocrStatus,
+        reason: ocrText
+          ? 'ocr_text_extracted'
+          : (hasPayload ? `ocr_${ocrStatus || 'not_run'}` : 'image_content_not_analyzed'),
       });
       continue;
     }
 
     if (UNSUPPORTED_EXTENSIONS.has(item.ext)) {
-      unsupported.push({ type: 'unsupported', ext: item.ext, size: item.size, reason: 'unsupported_document_type' });
+      unsupported.push({ type: 'unsupported', filename: item.filename, ext: item.ext, size: item.size, reason: 'unsupported_document_type' });
       continue;
     }
 
-    unsupported.push({ type: 'unsupported', ext: item.ext, size: item.size, reason: 'unsupported_extension' });
+    unsupported.push({ type: 'unsupported', filename: item.filename, ext: item.ext, size: item.size, reason: 'unsupported_extension' });
   }
 
   const byExtension = normalized.reduce((acc, item) => {
@@ -145,51 +191,86 @@ function buildQuestionAttachmentContext(attachments = []) {
     return acc;
   }, {});
 
+  const imagePayloadCount = imageItems.filter(item => item.hasPayload).length;
+  const ocrFailedCount = imageItems.filter(item =>
+    item.hasPayload && item.ocrStatus && !['ok', 'empty'].includes(item.ocrStatus)
+  ).length;
+
   const lines = [
     '## 고객 첨부파일 정보',
     '',
     `- 첨부 개수: ${normalized.length}`,
     `- 확장자 요약: ${summarizeMeta(normalized)}`,
-    `- 내용 분석 포함: ${analyzed.length}건`,
-    `- 이미지 첨부(PNG, 내용 분석 미지원): ${imageOnly.length}건`,
+    `- 텍스트 분석 포함: ${analyzed.length}건`,
+    `- 이미지 첨부: ${imageItems.length}건(이미지 데이터 수신 ${imagePayloadCount}건, OCR 성공 ${imageOcr.length}건)`,
     `- 제외/차단: ${blocked.length}건`,
     `- 미지원 형식: ${unsupported.length}건`,
   ];
 
-  if (imageOnly.length > 0) {
-    lines.push('', 'PNG 화면 캡처가 첨부되어 있습니다. 현재 백엔드는 이미지 내용 분석은 수행하지 않으므로 화면 캡처 기준 확인이 필요할 수 있습니다.');
+  if (imageItems.length > 0) {
+    const metaOnlyCount = imageItems.length - imagePayloadCount;
+    lines.push(
+      '',
+      `이미지 첨부가 ${imageItems.length}건 포함되어 있습니다. 이미지 데이터 수신 ${imagePayloadCount}건, 메타데이터만 수신 ${metaOnlyCount}건입니다.`,
+      imageOcr.length > 0
+        ? `이미지 OCR 결과 ${imageOcr.length}건이 첨부 컨텍스트에 포함되었습니다. OCR 결과는 화면 텍스트 추정값이므로 원본 캡처와 함께 확인하십시오.`
+        : '이미지 OCR 결과가 없으므로 이미지 안의 오류 문구나 화면 상태는 근거로 확정하지 마십시오.',
+      ocrFailedCount > 0 ? `OCR 실패 또는 처리 제외: ${ocrFailedCount}건` : ''
+    );
   }
 
   if (blocked.length > 0) {
-    lines.push('', '라이선스/키/계약/실행 파일 등 위험 가능성이 있는 첨부가 제외되었습니다. 해당 첨부 내용은 AI 답변 생성에 사용하지 않습니다.');
+    lines.push('', '라이선스/키/계약/실행 파일 등 위험 가능성이 있는 첨부는 제외했습니다. 해당 첨부 내용은 AI 답변 생성에 사용하지 않습니다.');
   }
 
   if (analyzed.length > 0) {
     lines.push('', '## 첨부파일 분석 내용');
     analyzed.forEach((item, index) => {
-      lines.push('', `[첨부 ${index + 1} ${item.ext}]`, '```', item.content, '```');
+      lines.push('', `[첨부 ${index + 1} ${item.filename}]`, '```', item.content, '```');
+    });
+  }
+
+  if (imageOcr.length > 0) {
+    lines.push(
+      '',
+      '## 첨부 이미지 OCR 답변 지침',
+      '- OCR 사용법이나 OCR의 한계를 설명하는 답변으로 시작하지 마십시오.',
+      '- OCR 결과는 고객 문의에 포함된 오류/로그 텍스트처럼 취급하고, 확인된 오류 문구 기준의 원인과 조치부터 답변하십시오.',
+      '- 답변 첫 문단에는 OCR이라는 단어보다 오류 현상과 우선 확인 항목을 먼저 쓰십시오.',
+      '- OCR 오인식 가능성 안내는 마지막 주의사항에 한 문장으로만 짧게 포함하십시오.',
+      '- OCR 결과가 불완전해도 일반론으로 흐르지 말고, 읽히는 핵심 문구를 기준으로 가능한 확인 방향을 제시하십시오.'
+    );
+
+    lines.push('', '## 첨부 이미지 OCR 결과');
+    imageOcr.forEach((item, index) => {
+      lines.push('', `[이미지 ${index + 1} ${item.filename}]`, '```', item.content, '```');
     });
   }
 
   const policyParts = [
-    imageOnly.length > 0 ? 'PNG 이미지 첨부 화면 캡처 추가 확인 필요' : '',
-    blocked.length > 0 ? '라이선스 키 계약 위험 첨부 제외 담당자 확인 필요' : '',
+    imageOcr.length > 0 ? '첨부 이미지 OCR 분석 내용 포함' : '',
+    imageOcr.length > 0 ? 'OCR 결과가 문의와 관련 있으면 답변 본문에 핵심 문구를 반영' : '',
+    imageItems.length > imageOcr.length ? '이미지 첨부 OCR 미수행 화면 캡처 추가 확인 필요' : '',
+    blocked.length > 0 ? '라이선스 및 계약 위험 첨부 제외 해당성 확인 필요' : '',
     analyzed.length > 0 ? '첨부 텍스트 분석 내용 포함' : '',
   ].filter(Boolean);
 
   return {
     hasAttachments: true,
-    context: lines.join('\n'),
+    context: lines.filter(line => line !== '').join('\n'),
     policyText: policyParts.join('\n'),
     summary: {
       total: normalized.length,
       byExtension,
       analyzedTextCount: analyzed.length,
-      imageOnlyCount: imageOnly.length,
+      imageOnlyCount: imageItems.length,
+      imagePayloadCount,
+      imageOcrCount: imageOcr.length,
+      ocrFailedCount,
       blockedCount: blocked.length,
       unsupportedCount: unsupported.length,
     },
-    items: [...analyzed, ...imageOnly, ...blocked, ...unsupported].map(({ content, ...item }) => item),
+    items: [...analyzed, ...imageOcr, ...imageItems, ...blocked, ...unsupported].map(({ content, ...item }) => item),
   };
 }
 

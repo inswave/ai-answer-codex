@@ -19,6 +19,19 @@ const {
 const { buildQuestionAttachmentContext } = require('./attachmentContext');
 const { buildMcpContext } = require('./mcpContext');
 const { resolvePythonPath } = require('../utils/pythonPath');
+const {
+  extractEntities,
+  evaluateRagConfidence,
+  buildRefinementCandidates,
+  mergeRagCases,
+} = require('./queryRefinement');
+const { loadConfig } = require('../utils/config');
+
+const REFINEMENT_DEFAULTS = {
+  enabled: true,
+  confidenceThreshold: 0.6,
+  maxRefinementSearches: 2,
+};
 
 function buildQuestionTermContext(questionTermVerification) {
   const unverified = questionTermVerification?.unverified || [];
@@ -41,6 +54,12 @@ class AnswerPipeline {
     this.generator = new AnswerGenerator();
     this.verifier = new ApiVerifier();
     this.ragSearcherPath = path.join(__dirname, '../rag/searcher.py');
+
+    const cfg = loadConfig();
+    this.refinementConfig = {
+      ...REFINEMENT_DEFAULTS,
+      ...(cfg.refinement || {}),
+    };
   }
 
   /**
@@ -58,9 +77,9 @@ class AnswerPipeline {
     const classification = this.classifier.classify({ question: safeQuestion, answer: '' });
     console.log(`[Pipeline] classification: ${classification.categoryLabel} > ${classification.subcategoryLabel}`);
 
-    const ragResult = this._searchRAG(safeQuestion, options);
+    const ragResult = this._searchRAGMultiStep(safeQuestion, options);
     const safeRagContext = maskSensitiveInfo(ragResult.context);
-    console.log(`[Pipeline] RAG results: ${ragResult.resultCount}`);
+    console.log(`[Pipeline] RAG results: ${ragResult.resultCount}${ragResult.refinementUsed ? ' (with refinement)' : ''}`);
     const mcpContext = await buildMcpContext(safeQuestion, ragResult.cases, options);
     if (mcpContext.enabled) {
       console.log(`[Pipeline] MCP context: ${mcpContext.available ? `${mcpContext.items.length} items` : 'unavailable'}`);
@@ -69,6 +88,9 @@ class AnswerPipeline {
       }
     }
     const attachmentContext = buildQuestionAttachmentContext(options.attachments || []);
+    if (attachmentContext.summary.total > 0) {
+      console.log(`[Pipeline] attachments: ${attachmentContext.summary.total}, OCR: ${attachmentContext.summary.imageOcrCount}/${attachmentContext.summary.imagePayloadCount}`);
+    }
     const questionTermVerification = this.verifier.verifyQuestionTerms(safeQuestion);
     const questionTermContext = buildQuestionTermContext(questionTermVerification);
     if (questionTermVerification.unverified.length > 0) {
@@ -94,7 +116,7 @@ class AnswerPipeline {
       answerPolicy,
       questionTermVerification,
     });
-    result.answer = maskSensitiveInfo(result.answer);
+    result.answer = maskSensitiveInfo(result.answer, { maskFilenames: false });
     console.log(`[Pipeline] answer generated (${result.usage.inputTokens + result.usage.outputTokens} tokens)`);
 
     let verification = this.verifier.verify(result.answer);
@@ -113,7 +135,7 @@ class AnswerPipeline {
         invalidApis,
         { version: options.version, libraries: options.libraries, answerPolicy, questionTermVerification }
       );
-      result.answer = maskSensitiveInfo(result.answer);
+      result.answer = maskSensitiveInfo(result.answer, { maskFilenames: false });
       console.log(`[Pipeline] regenerated (${result.usage.inputTokens + result.usage.outputTokens} tokens)`);
 
       verification = this.verifier.verify(result.answer);
@@ -184,9 +206,9 @@ class AnswerPipeline {
 
     console.log('[Pipeline] follow-up start');
 
-    const ragResult = this._searchRAG(safeFollowUp, options);
+    const ragResult = this._searchRAGMultiStep(safeFollowUp, options);
     const safeRagContext = maskSensitiveInfo(ragResult.context);
-    console.log(`[Pipeline] follow-up RAG results: ${ragResult.resultCount}`);
+    console.log(`[Pipeline] follow-up RAG results: ${ragResult.resultCount}${ragResult.refinementUsed ? ' (with refinement)' : ''}`);
     const mcpContext = await buildMcpContext(safeFollowUp, ragResult.cases, options);
     if (mcpContext.enabled) {
       console.log(`[Pipeline] follow-up MCP context: ${mcpContext.available ? `${mcpContext.items.length} items` : 'unavailable'}`);
@@ -195,6 +217,9 @@ class AnswerPipeline {
       }
     }
     const attachmentContext = buildQuestionAttachmentContext(options.attachments || []);
+    if (attachmentContext.summary.total > 0) {
+      console.log(`[Pipeline] follow-up attachments: ${attachmentContext.summary.total}, OCR: ${attachmentContext.summary.imageOcrCount}/${attachmentContext.summary.imagePayloadCount}`);
+    }
     const questionTermVerification = this.verifier.verifyQuestionTerms([safeOriginalQuestion, safeFollowUp].join('\n\n'));
     const questionTermContext = buildQuestionTermContext(questionTermVerification);
     if (questionTermVerification.unverified.length > 0) {
@@ -220,7 +245,7 @@ class AnswerPipeline {
       generationContext,
       { version: options.version, libraries: options.libraries, answerPolicy, questionTermVerification }
     );
-    result.answer = maskSensitiveInfo(result.answer);
+    result.answer = maskSensitiveInfo(result.answer, { maskFilenames: false });
     console.log(`[Pipeline] follow-up generated (${result.usage.inputTokens + result.usage.outputTokens} tokens)`);
 
     let verification = this.verifier.verify(result.answer);
@@ -240,7 +265,7 @@ class AnswerPipeline {
         invalidApis,
         { version: options.version, libraries: options.libraries, answerPolicy, questionTermVerification }
       );
-      result.answer = maskSensitiveInfo(result.answer);
+      result.answer = maskSensitiveInfo(result.answer, { maskFilenames: false });
       verification = this.verifier.verify(result.answer);
       console.log(`[Pipeline] ${verification.summary}`);
     }
@@ -323,6 +348,79 @@ class AnswerPipeline {
       console.warn('[Pipeline] RAG search failed:', err.message);
       return { context: '', resultCount: 0, cases: [] };
     }
+  }
+
+  /**
+   * 다단계 RAG 검색
+   *
+   * 1차 검색 → 신뢰도 평가 → 낮으면 규칙 기반 키워드 추출 후 보강 검색 → 결과 병합.
+   * API 응답 스키마는 _searchRAG와 동일 (cases/context/resultCount).
+   * 추가 필드 (confidence, refinementUsed)는 내부 로깅용.
+   */
+  _searchRAGMultiStep(question, options) {
+    const primary = this._searchRAG(question, options);
+
+    // refinement 비활성 또는 1차에서 cases 없음 → 그대로 반환
+    if (!this.refinementConfig.enabled || primary.cases.length === 0) {
+      return { ...primary, refinementUsed: false };
+    }
+
+    const entities = extractEntities(question);
+    const confidence = evaluateRagConfidence({ cases: primary.cases }, entities);
+    console.log(
+      `[Pipeline] RAG primary: ${primary.cases.length} cases, confidence=${confidence.score}`
+        + ` (top1=${confidence.breakdown.top1Score}, src=${confidence.breakdown.sourceQuality},`
+        + ` kw=${confidence.breakdown.keywordMatch}, dens=${confidence.breakdown.resultDensity})`
+    );
+
+    if (confidence.score >= this.refinementConfig.confidenceThreshold) {
+      return {
+        ...primary,
+        confidence,
+        entities,
+        refinementUsed: false,
+      };
+    }
+
+    // 보강 검색 후보 생성
+    const candidates = buildRefinementCandidates(question, entities, confidence)
+      .slice(0, this.refinementConfig.maxRefinementSearches);
+
+    if (candidates.length === 0) {
+      console.log('[Pipeline] confidence low but no refinement candidates available');
+      return { ...primary, confidence, entities, refinementUsed: false };
+    }
+
+    console.log(`[Pipeline] confidence ${confidence.score} < ${this.refinementConfig.confidenceThreshold}, refining with ${candidates.length} queries`);
+
+    const secondaryGroups = [];
+    for (const cand of candidates) {
+      console.log(`[Pipeline]   refine[${cand.strategy}]: "${cand.query}"`);
+      const sec = this._searchRAG(cand.query, options);
+      if (sec.cases.length > 0) {
+        secondaryGroups.push(sec.cases);
+      }
+    }
+
+    const mergedCases = mergeRagCases(primary.cases, secondaryGroups);
+    const mergedContext = buildRagContext(mergedCases, {
+      minMatch: options.minMatch,
+    });
+
+    const finalConfidence = evaluateRagConfidence({ cases: mergedCases }, entities);
+    console.log(`[Pipeline] RAG final: ${mergedCases.length} cases, confidence=${finalConfidence.score} (was ${confidence.score})`);
+
+    return {
+      context: mergedContext,
+      rawContext: primary.rawContext,
+      resultCount: mergedCases.length,
+      cases: mergedCases,
+      confidence: finalConfidence,
+      initialConfidence: confidence,
+      entities,
+      refinementUsed: true,
+      refinementCandidates: candidates,
+    };
   }
 
   /**

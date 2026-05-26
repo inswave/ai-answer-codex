@@ -12,7 +12,9 @@ const fsSync = require('fs');
 const path = require('path');
 const cheerio = require('cheerio');
 
-const RAW_DIR = path.join(__dirname, '../data/raw');
+const rawDirArgIndex = process.argv.indexOf('--raw-dir');
+const rawDirArg = rawDirArgIndex !== -1 ? process.argv[rawDirArgIndex + 1] : '';
+const RAW_DIR = path.resolve(rawDirArg || process.env.TECHASSISTANT_RAW_DIR || path.join(__dirname, '../data/raw'));
 const OUTPUT_PATH = path.join(__dirname, '../data/processed/all_qa.json');
 
 // docs.inswave.com 가이드 URL 매핑 (사용자 정리본 2026-04-29 기준)
@@ -147,6 +149,120 @@ function cleanText(text) {
     .trim();
 }
 
+const GMAIL_QUOTE_PATTERNS = [
+  /^-{2,}\s*Original Message\s*-{2,}$/i,
+  /^-{2,}\s*Forwarded message\s*-{2,}$/i,
+  /^On .+ wrote:$/i,
+  /^20\d{2}년\s*\d{1,2}월\s*\d{1,2}일.*작성:?\s*$/i,
+  /^보낸 사람\s*:/,
+  /^발신\s*:/,
+  /^From\s*:/i,
+  /^Sent\s*:/i,
+  /^To\s*:/i,
+  /^Cc\s*:/i,
+  /^Subject\s*:/i,
+];
+
+const GMAIL_SIGNATURE_PATTERNS = [
+  /^--\s*$/,
+  /^감사합니다\.?$/,
+  /^고맙습니다\.?$/,
+  /^Regards,?$/i,
+  /^Best regards,?$/i,
+  /^Thanks,?$/i,
+  /^inswave$/i,
+  /^인스웨이브/i,
+  /^\(주\)\s*인스웨이브/i,
+];
+
+const WEAK_GMAIL_SUBJECT_PATTERNS = [
+  /^문의\s*(드립니다|합니다)?\.?$/i,
+  /^확인\s*(요청|부탁).*/i,
+  /^답변\s*(요청|부탁).*/i,
+  /^오류\s*문의\.?$/i,
+  /^기술\s*문의\.?$/i,
+  /^question\.?$/i,
+  /^inquiry\.?$/i,
+  /^request\.?$/i,
+  /^\s*(re|fw|fwd)\s*:/i,
+];
+
+const GMAIL_BODY_NOISE_PATTERNS = [
+  /^안녕하세요\.?$/,
+  /^안녕하십니까\.?$/,
+  /^hello\.?$/i,
+  /^hi\.?$/i,
+  /^dear\s+.+/i,
+];
+
+function stripGmailNoise(text) {
+  if (!text) return '';
+
+  const normalized = String(text)
+    .replace(/\r\n/g, '\n')
+    .replace(/\r/g, '\n')
+    .replace(/\u00a0/g, ' ')
+    .replace(/\u200b/g, '')
+    .replace(/\[image:[^\]]*\]/g, '');
+
+  const lines = normalized.split('\n');
+  const kept = [];
+
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (GMAIL_QUOTE_PATTERNS.some((pattern) => pattern.test(trimmed))) break;
+    if (/^>/.test(trimmed)) continue;
+    kept.push(line);
+  }
+
+  while (kept.length > 0) {
+    const tail = kept[kept.length - 1].trim();
+    if (!tail || GMAIL_SIGNATURE_PATTERNS.some((pattern) => pattern.test(tail))) {
+      kept.pop();
+      continue;
+    }
+    break;
+  }
+
+  return cleanText(kept.join('\n'))
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
+
+function isWeakGmailSubject(subject) {
+  const value = cleanText(subject || '')
+    .replace(/^\s*(re|fw|fwd)\s*:\s*/i, '')
+    .trim();
+  if (!value) return true;
+  if (value.length < 8) return true;
+  return WEAK_GMAIL_SUBJECT_PATTERNS.some((pattern) => pattern.test(value));
+}
+
+function buildGmailQuestion(subject, body) {
+  const cleanSubject = cleanText(subject || '');
+  const cleanBody = stripGmailNoise(body || '');
+  const bodyLines = cleanBody
+    .split('\n')
+    .map((line) => line.trim())
+    .filter((line) => line.length >= 8)
+    .filter((line) => !GMAIL_BODY_NOISE_PATTERNS.some((pattern) => pattern.test(line)))
+    .filter((line) => !GMAIL_SIGNATURE_PATTERNS.some((pattern) => pattern.test(line)));
+
+  const excerpt = bodyLines.join('\n').slice(0, 700).trim();
+  if (!cleanSubject) return excerpt;
+  if (!excerpt) return cleanSubject;
+
+  if (isWeakGmailSubject(cleanSubject)) {
+    return `${cleanSubject}\n\n${excerpt}`.trim();
+  }
+
+  const subjectLower = cleanSubject.toLowerCase();
+  const excerptLower = excerpt.toLowerCase();
+  if (excerptLower.includes(subjectLower)) return cleanSubject;
+
+  return `${cleanSubject}\n\n${excerpt}`.slice(0, 1000).trim();
+}
+
 function loadJSON(filePath) {
   return fs.readFile(filePath, 'utf8').then(JSON.parse);
 }
@@ -169,24 +285,26 @@ async function convertGmail() {
 
     // 새 수집기 형식: question/answer 필드가 이미 있는 경우
     if (item.question && item.answer) {
-      question = cleanText(item.question);
-      answer = cleanText(item.answer);
+      const cleanedQuestion = stripGmailNoise(item.question);
+      answer = stripGmailNoise(item.answer);
+      question = buildGmailQuestion(item.subject || cleanedQuestion, cleanedQuestion);
     }
     // 기존 형식: subject/content 기반 변환
     else {
       const rawContent = item.content || '';
-      const content = cleanText(rawContent);
+      const content = stripGmailNoise(rawContent);
       if (!content || content.length < 20) continue;
 
       // 방법 1: Q:/A: 접두어로 분리
       const qaMatch = rawContent.match(/Q:\s*([\s\S]*?)(?:\nA:\s*)([\s\S]*)/);
       if (qaMatch) {
-        question = cleanText(qaMatch[1]);
-        answer = cleanText(qaMatch[2]);
+        const qPart = stripGmailNoise(qaMatch[1]);
+        question = buildGmailQuestion(item.subject || '', qPart);
+        answer = stripGmailNoise(qaMatch[2]);
       }
       // 방법 2: subject를 질문으로, content를 답변으로
       else {
-        question = cleanText(item.subject || '');
+        question = buildGmailQuestion(item.subject || '', content);
         answer = content;
       }
     }

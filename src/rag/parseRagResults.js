@@ -81,10 +81,111 @@ function getSourceType(source) {
   if (lower.includes('faq')) return 'faq';
   if (source.includes('Gmail') || source.includes('메일') || source.includes('이메일')) return 'email';
   if (lower.includes('confluence')) return 'wiki';
-  if (lower.includes('api guide') || source.includes('API 가이드')) return 'api-guide';
+  if (lower.includes('api guide') || source.includes('API 가이드') || lower.includes('api')) return 'api-guide';
   if (source.includes('릴리즈') || lower.includes('release')) return 'release-note';
   if (source.includes('가이드') || lower.includes('guide')) return 'guide';
   return 'doc';
+}
+
+const DOCS_HOST = 'https://docs.inswave.com/websquare/websquare.html?w2xPath=';
+
+const API_GUIDE_URLS = {
+  ai: 'https://docs.inswave.com/support/api/ws5_ai/6.0_0.1550R.20260417.145224/index.html',
+  sp5: `${DOCS_HOST}/support/api/ws5_sp5/api.xml`,
+  sp4: `${DOCS_HOST}/support/api/ws5_sp4/api.xml`,
+  sp3: `${DOCS_HOST}/support/api/ws5_sp3/api.xml`,
+  sp2: `${DOCS_HOST}/support/api/w5_sp2/api.xml`,
+  sp1: `${DOCS_HOST}/support/api/w5/api.xml`,
+  ws2: `${DOCS_HOST}/support/api/w2/api.xml`,
+};
+
+const RELEASE_NOTE_URLS = {
+  ai: 'https://docs1.inswave.com/ai_release_note',
+  sp5: 'https://docs1.inswave.com/sp5_release_note',
+  sp4: 'https://docs1.inswave.com/sp4_release_note',
+  sp3: 'https://docs1.inswave.com/sp3_release_note',
+  sp2: 'https://docs1.inswave.com/sp2_release_note',
+  sp1: 'https://docs1.inswave.com/sp1_release_note',
+  ws2: 'https://docs1.inswave.com/ws2_release_note',
+};
+
+const DEV_GUIDE_URLS = {
+  ai: 'https://docs1.inswave.com/ai_user_guide',
+  sp5: 'https://docs1.inswave.com/sp5_user_guide',
+  sp4: 'https://docs1.inswave.com/sp4_user_guide',
+  sp3: 'https://docs1.inswave.com/sp3_user_guide',
+  sp2: 'https://docs1.inswave.com/sp2_user_guide',
+};
+
+const OTHER_GUIDE_URLS = {
+  component: 'https://docs1.inswave.com/component_user_guide',
+  wre: 'https://docs1.inswave.com/component_for_wre',
+  snippet: 'https://docs1.inswave.com/sp5_snippet_guide',
+  publishing: 'https://docs1.inswave.com/sp5_publishing_guide',
+  accessibility: 'https://docs1.inswave.com/accessibility',
+};
+
+function extractVersion(source) {
+  const s = String(source || '');
+  if (/websquare2|websquare 2|웹스퀘어2|ws2|w2/i.test(s)) return 'ws2';
+  if (/\bAI\b|ws5_ai/i.test(s)) return 'ai';
+  if (/SP5|ws5_sp5/i.test(s)) return 'sp5';
+  if (/SP4|ws5_sp4/i.test(s)) return 'sp4';
+  if (/SP3|ws5_sp3/i.test(s)) return 'sp3';
+  if (/SP2|w5_sp2/i.test(s)) return 'sp2';
+  if (/SP1|w5\/api|w5_api/i.test(s)) return 'sp1';
+  return null;
+}
+
+function getDocsUrl(source) {
+  const s = String(source || '');
+  const lower = s.toLowerCase();
+  const version = extractVersion(s);
+
+  if (lower.includes('accessibility') || s.includes('접근성')) return OTHER_GUIDE_URLS.accessibility;
+  if (lower.includes('publishing') || s.includes('퍼블리싱')) return OTHER_GUIDE_URLS.publishing;
+  if (lower.includes('snippet') || s.includes('스니핏')) return OTHER_GUIDE_URLS.snippet;
+  if (lower.includes('wre')) return OTHER_GUIDE_URLS.wre;
+  if (lower.includes('component') || s.includes('컴포넌트')) return OTHER_GUIDE_URLS.component;
+  if (lower.includes('release') || s.includes('릴리즈')) return RELEASE_NOTE_URLS[version] || '';
+  if (lower.includes('api')) return API_GUIDE_URLS[version] || API_GUIDE_URLS.sp5;
+  if (lower.includes('guide') || s.includes('가이드')) return DEV_GUIDE_URLS[version] || '';
+  return '';
+}
+
+function getSourceTitle(c) {
+  const type = getSourceType(c.source);
+  if (type === 'board') return 'W-Tech';
+  if (type === 'faq') return 'W-Tech FAQ';
+
+  const rawTitle = String(c.title || '').trim();
+  if (rawTitle && !/^(사례|\?щ?)\s*\d+$/i.test(rawTitle)) {
+    return rawTitle;
+  }
+  return getSafeSourceTitle(c);
+}
+
+function maskSourceUrl(url) {
+  const value = String(url || '').trim();
+  if (!value) return '';
+
+  try {
+    const parsed = new URL(value);
+    const host = parsed.hostname.toLowerCase();
+    const allowedHosts = [
+      'docs.inswave.com',
+      'docs1.inswave.com',
+      'inswave01.atlassian.net',
+    ];
+
+    if (allowedHosts.includes(host)) {
+      return value;
+    }
+  } catch {
+    return '';
+  }
+
+  return maskSensitiveInfo(value);
 }
 
 function getSafeSourceTitle(c) {
@@ -111,19 +212,22 @@ function getSafeSourceTitle(c) {
  * url: 가능한 경우 원본 링크. 현재 searcher.py가 id/url을 노출 안 해서 빈 문자열.
  *      추후 indexer/searcher가 metadata에 id+url을 넣으면 채울 수 있음.
  */
-function toSources(cases) {
+function toSources(cases, options = {}) {
+  const includeAttachments = options.includeAttachments === true;
+
   return cases.map(c => {
+    const url = c.url || getDocsUrl(c.source);
     const out = {
-      title: getSafeSourceTitle(c),
+      title: maskSensitiveInfo(getSourceTitle(c)),
       meta: maskSensitiveInfo(c.source),
       match: c.match,
-      url: maskSensitiveInfo(c.url || ''),
+      url: maskSourceUrl(url),
       type: getSourceType(c.source),
     };
     // 검증된 개발가이드 샘플만 첨부로 노출한다. Gmail 고객 첨부는 노출하지 않는다.
-    if (isSampleAttachmentCase(c) && Array.isArray(c.attachments) && c.attachments.length > 0) {
+    if (includeAttachments && isSampleAttachmentCase(c) && Array.isArray(c.attachments) && c.attachments.length > 0) {
       out.attachments = c.attachments.map((a) => ({
-        filename: maskSensitiveInfo(a.filename || ''),
+        filename: maskSensitiveInfo(a.filename || '', { maskFilenames: false }),
         mimeType: a.mimeType || '',
         size: a.size || 0,
         // 다운로드 URL: /api/attachment?dir={attachmentDir}&filename={filename}

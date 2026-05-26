@@ -7,6 +7,8 @@
  */
 
 const { execFileSync, spawn } = require('child_process');
+const fs = require('fs');
+const path = require('path');
 const fetch = require('node-fetch');
 const { loadConfig } = require('../utils/config');
 const { maskSensitiveInfo } = require('../utils/masking');
@@ -17,21 +19,40 @@ const DEFAULT_CACHE_TTL_MS = 60 * 60 * 1000;
 const MCP_CACHE = new Map();
 
 const COMPONENT_ALIASES = [
-  { pattern: /\bgrid\s*view\b|\bgridview\b|\bgridView\b|그리드/i, component: 'gridView' },
+  { pattern: /\bgrid\s*view\b|\bgridview\b|\bgridView\b|그리드뷰|그리드/i, component: 'gridView' },
   { pattern: /\bgridView\/column\b|\bcolumn\b|컬럼/i, component: 'gridView/column' },
   { pattern: /\bdata\s*list\b|\bdataList\b|데이터리스트/i, component: 'dataList' },
   { pattern: /\bdata\s*map\b|\bdataMap\b|데이터맵/i, component: 'dataMap' },
-  { pattern: /\bsubmission\b|서브미션/i, component: 'Submission' },
+  { pattern: /\bsubmission\b|서브미션|서버\s*요청/i, component: 'Submission' },
   { pattern: /\$p\b|openPopup|executeSubmission/i, component: '$p' },
   { pattern: /\bWebSquare\.net\b|\bWebSquare\/net\b/i, component: 'WebSquare/net' },
-  { pattern: /\binputCalendar\b|인풋캘린더/i, component: 'inputCalendar' },
-  { pattern: /\bautoComplete\b|자동완성/i, component: 'autoComplete' },
-  { pattern: /\btabControl\b|탭컨트롤/i, component: 'tabControl' },
+  { pattern: /\binputCalendar\b|인풋캘린더|캘린더/i, component: 'inputCalendar' },
+  { pattern: /\bautoComplete\b|autocomplate|자동완성/i, component: 'autoComplete' },
+  { pattern: /\btabControl\b|tabcontrol|tac_layout|탭컨트롤|탭 컨트롤|메뉴탭/i, component: 'tabControl' },
   { pattern: /\bwindowContainer\b|윈도우컨테이너|MDI/i, component: 'windowContainer' },
   { pattern: /\bscheduleCalendar\b|스케줄캘린더/i, component: 'scheduleCalendar' },
   { pattern: /\btextarea\b|textArea|텍스트에어리어/i, component: 'textarea' },
   { pattern: /\btextbox\b|textBox|텍스트박스/i, component: 'textbox' },
   { pattern: /\btrigger\b|버튼/i, component: 'trigger' },
+  // 추가 — 5/26 Phase 2 수집된 컴포넌트
+  { pattern: /\bselect\s*box\b|\bselectbox\b|\bselectBox\b|셀렉트박스|셀렉트 박스/i, component: 'selectbox' },
+  { pattern: /\btree\s*view\b|\btreeview\b|\btreeView\b|트리뷰|트리 뷰/i, component: 'treeview' },
+  { pattern: /\bmulti\s*upload\b|\bmultiupload\b|\bmultiUpload\b|멀티업로드|다중\s*업로드/i, component: 'multiupload' },
+  { pattern: /\bwframe\b|\bwFrame\b|\bWFrame\b|와이프레임/i, component: 'wframe' },
+  // alias 누락 보강 — 평가에서 미매칭이었던 케이스 대응
+  { pattern: /\bgroup\b|그룹\s*(컴포넌트)?|grp_/i, component: 'group' },
+  { pattern: /\bfusionchart\b|퓨전차트|퓨전\s*차트/i, component: 'fusionchart' },
+  { pattern: /\bchart\b|차트(?!\s*리소스)/i, component: 'chart' },
+  { pattern: /\beditor\b|CKfinder|CKEditor|에디터/i, component: 'editor' },
+  // 유틸리티 클래스 — showModal/showProcessMessage 등은 실제로 $p에 속함
+  { pattern: /\bWebSquare\.layer\b|\bWebSquare\/layer\b/i, component: 'WebSquare/layer' },
+  { pattern: /\bWebSquare\.util\b|\bWebSquare\/util\b/i, component: 'WebSquare/util' },
+  { pattern: /\bWebSquare\.xml\b|\bWebSquare\/xml\b/i, component: 'WebSquare/xml' },
+  { pattern: /\bWebSquare\.date\b|\bWebSquare\/date\b/i, component: 'WebSquare/date' },
+  { pattern: /\$p\.|openMenu|getParameter|setParameter|getValueObj|showProcessMessage|showModal|hideProcessMessage|hideModal/i, component: '$p' },
+  // 서브컴포넌트
+  { pattern: /\bgridView\/column\b|gridView\s*컬럼/i, component: 'gridView/column' },
+  { pattern: /\bdataList\/column\b|dataList\s*컬럼/i, component: 'dataList/column' },
 ];
 
 const STOP_TERMS = new Set([
@@ -113,17 +134,47 @@ function buildQueries(question, ragCases, maxItems) {
   const queries = [];
 
   for (const component of components) {
-    const term = searchTerms.find((item) => text.toLowerCase().includes(item.toLowerCase()));
+    // 검색어가 컴포넌트명 자체와 같으면(또는 컴포넌트명을 포함하면) 의미 없으므로 제외
+    const compLower = component.toLowerCase();
+    const compLast = compLower.split('/').pop();
+    const term = searchTerms.find((item) => {
+      const it = item.toLowerCase();
+      if (it === compLower || it === compLast) return false;
+      return text.toLowerCase().includes(it);
+    });
     queries.push({ component, search: term || undefined });
   }
 
-  if (queries.length === 0) {
-    for (const term of searchTerms) {
-      queries.push({ component: 'gridView', search: term });
+  // 컴포넌트 매칭 0건일 때:
+  //  - 옛 동작: 무조건 gridView로 fallback (다른 컴포넌트 질문에 잘못된 매칭)
+  //  - 새 동작: RAG top1 source에서 컴포넌트 추정. 추정 못 하면 빈 결과 반환 (graceful).
+  if (queries.length === 0 && Array.isArray(ragCases) && ragCases.length > 0) {
+    const inferred = inferComponentFromRagSource(ragCases[0]);
+    if (inferred) {
+      const term = searchTerms.find((item) => {
+        const it = item.toLowerCase();
+        return it !== inferred.toLowerCase() && text.toLowerCase().includes(it);
+      });
+      queries.push({ component: inferred, search: term || undefined });
     }
   }
 
   return queries.slice(0, maxItems);
+}
+
+/**
+ * RAG top1 case의 source/title에서 컴포넌트명 추정.
+ * 예: source="WebSquare API Guide (AI)" + title="gridView.setCellData ..." → 'gridView'
+ */
+function inferComponentFromRagSource(ragCase) {
+  if (!ragCase) return null;
+  const haystack = [ragCase.title, ragCase.source, ragCase.content?.slice(0, 200)]
+    .filter(Boolean)
+    .join(' ');
+  for (const alias of COMPONENT_ALIASES) {
+    if (alias.pattern.test(haystack)) return alias.component;
+  }
+  return null;
 }
 
 function parseProviderResponse(output) {
@@ -349,6 +400,76 @@ async function queryByHttp(config, request) {
   }
 }
 
+/**
+ * Static-file provider: 사내 MCP 서버에서 미리 수집한 스펙을
+ * data/processed/mcp_specs/{component}/{section}.md 파일로 읽어 반환.
+ *
+ * - sourceDir: 기본 ./data/processed/mcp_specs
+ * - search 키워드가 있으면 해당 메서드/속성/이벤트 섹션만 추출
+ * - 없으면 methods.md 전체 (단, maxBytes로 제한)
+ */
+function queryByStatic(config, request) {
+  const baseDir = config.staticDir
+    ? path.resolve(config.staticDir)
+    : path.resolve(__dirname, '../../data/processed/mcp_specs');
+  const maxBytes = Number(config.staticMaxBytes || 4000);
+  const component = String(request.arguments?.component || '').trim();
+  const search = String(request.arguments?.search || '').trim();
+  if (!component) return { ok: false, error: 'static: empty component' };
+
+  // search 키워드가 컴포넌트명 자체면 무시 (일반 overview 반환)
+  const effectiveSearch = search && search.toLowerCase() !== component.toLowerCase()
+    ? search
+    : '';
+
+  const componentDir = path.join(baseDir, component);
+  if (!fs.existsSync(componentDir)) {
+    return { ok: false, error: `static: no spec for ${component}` };
+  }
+
+  const sectionFiles = ['methods.md', 'properties.md', 'events.md'];
+  const candidates = [];
+  for (const f of sectionFiles) {
+    const p = path.join(componentDir, f);
+    if (fs.existsSync(p)) candidates.push({ section: f.replace('.md', ''), path: p });
+  }
+  if (candidates.length === 0) {
+    return { ok: false, error: `static: no spec files in ${componentDir}` };
+  }
+
+  const blocks = [];
+  for (const cand of candidates) {
+    const content = fs.readFileSync(cand.path, 'utf8');
+    if (effectiveSearch) {
+      // 검색어 들어간 섹션(`## name` 또는 `### name`)만 추출
+      // - Agent 압축 시 일부 컴포넌트는 ### 헤더로 저장됨
+      const sectionRe = /(^#{2,3} [^\n]+\n[\s\S]*?)(?=^#{2,3} |^---\n*$|\Z)/gm;
+      let m;
+      while ((m = sectionRe.exec(content)) !== null) {
+        const block = m[1];
+        // 헤더 또는 본문 처음 500자에 검색어 있으면 매칭
+        const header = block.split('\n', 1)[0].toLowerCase();
+        const headBody = block.slice(0, 500).toLowerCase();
+        if (header.includes(effectiveSearch.toLowerCase())
+            || headBody.includes(effectiveSearch.toLowerCase())) {
+          blocks.push(`[${component}.${cand.section}]\n${block.slice(0, 1500).trim()}`);
+          if (blocks.length >= 3) break;
+        }
+      }
+      if (blocks.length >= 3) break;
+    } else {
+      // search 없으면 첫 N자만
+      blocks.push(`[${component}.${cand.section}]\n${content.slice(0, maxBytes).trim()}`);
+    }
+  }
+
+  if (blocks.length === 0) {
+    return { ok: false, error: `static: no match for "${effectiveSearch}" in ${component}` };
+  }
+
+  return { ok: true, text: blocks.join('\n\n').slice(0, 12000) };
+}
+
 async function queryMcp(config, query) {
   const request = {
     tool: 'get_component',
@@ -373,6 +494,8 @@ async function queryMcp(config, query) {
     result = await callStdioMcp(config, request);
   } else if (config.provider === 'http') {
     result = await queryByHttp(config, request);
+  } else if (config.provider === 'static') {
+    result = queryByStatic(config, request);
   } else {
     result = queryByCommand(config, request);
   }

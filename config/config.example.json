@@ -66,6 +66,26 @@
   "apiGuide": {
     "sourceDir": "./data/raw/api_guide_html"
   },
+  "apiVerifier": {
+    "sourceDirs": [
+      "./data/raw/api_guide_html"
+    ],
+    "extensions": [
+      ".html",
+      ".htm",
+      ".xml"
+    ],
+    "maxFileBytes": 2097152
+  },
+  "ocr": {
+    "enabled": true,
+    "command": "tesseract",
+    "lang": "kor+eng",
+    "tessdataDir": "./data/tessdata",
+    "timeoutMs": 30000,
+    "maxImages": 3,
+    "maxBytes": 5242880
+  },
   "llmProvider": "codexExec",
   "codexExec": {
     "command": "codex",
@@ -75,8 +95,10 @@
     "model": "codex-exec"
   },
   "mcp": {
-    "enabled": false,
-    "provider": "stdio",
+    "enabled": true,
+    "provider": "static",
+    "staticDir": "./data/processed/mcp_specs",
+    "staticMaxBytes": 4000,
     "command": "",
     "args": [],
     "endpoint": "",
@@ -87,7 +109,15 @@
   },
   "answer": {
     "responderName": "홍길동",
+    "memoryEnabled": true,
+    "memoryPath": "./MEMORY.md",
+    "memoryMaxChars": 6000,
     "template": "안녕하세요.\n인스웨이브 기술지원팀 {{name}} 프로입니다.\n\n{{topic}}과 관련하여 확인 후 답변드립니다.\n\n{{content}}\n\n감사합니다."
+  },
+  "refinement": {
+    "enabled": true,
+    "confidenceThreshold": 0.6,
+    "maxRefinementSearches": 2
   },
   "api": {
     "port": 3000,

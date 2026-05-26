@@ -46,7 +46,8 @@ for (const item of cases) {
 
 const appended = appendPolicyNotice('본문 답변입니다.', { answerMode: 'needs_context' });
 assert.match(appended, /본문 답변입니다\./);
-assert.match(appended, /추가 정보를 입력하여 AI 추가답변/);
+assert.match(appended, /현재 참고자료와 유사 사례 기준의 우선 확인\/적용 방향/);
+assert.match(appended, /세부 조정이 필요하면 추가 정보를 입력/);
 
 const once = appendPolicyNotice(appended, { answerMode: 'needs_context' });
 assert.strictEqual(once, appended, 'policy notice should not be duplicated');

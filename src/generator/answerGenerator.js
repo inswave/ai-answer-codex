@@ -8,6 +8,7 @@ const os = require('os');
 const path = require('path');
 const { loadConfig } = require('../utils/config');
 const { getPromptPolicyInstructions } = require('./answerPolicy');
+const { buildPromptMemory } = require('./promptMemory');
 
 const KOREAN_CHAR_RE = /[가-힣]/g;
 const LATIN_WORD_RE = /\b[A-Za-z][A-Za-z'-]*\b/g;
@@ -83,7 +84,7 @@ function hasMostlyEnglishNarrative(text) {
   return latinWords.length >= 25 && koreanChars.length < 40;
 }
 
-function buildSystemPrompt(answerConfig, hasRagResults, answerPolicy) {
+function buildSystemPrompt(answerConfig, hasRagResults, answerPolicy, promptMemory = '') {
   const name = answerConfig?.responderName || 'support';
   const template = answerConfig?.template
     || '?덈뀞?섏꽭??\n?몄뒪?⑥씠釉?湲곗닠吏?먰? {{name}} ?꾨줈?낅땲??\n\n{{topic}}怨?愿?⑦븯???뺤씤 ???듬??쒕┰?덈떎.\n\n{{content}}\n\n媛먯궗?⑸땲??';
@@ -98,7 +99,7 @@ function buildSystemPrompt(answerConfig, hasRagResults, answerPolicy) {
    - ?ъ슜 以묒씤 WebSquare 踰꾩쟾 諛?鍮뚮뱶??   - 愿???먮윭 硫붿떆吏 ?먮뒗 濡쒓렇
    - ?ы쁽 諛⑸쾿"`;
 
-  return `?뱀떊? ?몄뒪?⑥씠釉?WebSquare 湲곗닠吏???꾨Ц媛?낅땲??
+  const basePrompt = `?뱀떊? ?몄뒪?⑥씠釉?WebSquare 湲곗닠吏???꾨Ц媛?낅땲??
 
 ?꾨옒 洹쒖튃??諛섎뱶??以?섑븯???듬????묒꽦?섏떗?쒖삤:
 
@@ -148,6 +149,120 @@ ${template.replace('{{name}}', name)}
 - {{content}}?먮뒗 ?ㅼ젣 ?듬? ?댁슜???ｌ쑝??떆??
 - 議대뙎留??ъ슜
 - 媛꾧껐?섍퀬 紐낇솗?섍쾶 ?묒꽦`;
+
+  return [promptMemory, basePrompt].filter(Boolean).join('\n\n');
+}
+
+function buildCodexSupportPrompt(hasRagResults, answerPolicy, promptMemory = '') {
+  const ragRule = hasRagResults
+    ? '- 참고자료에서 직접 확인되는 API/속성/이벤트는 확정적으로, 유사 사례나 개발가이드 패턴은 "유사 사례 기준"으로 범위를 밝혀 답변합니다.'
+    : '- 관련 RAG 참고자료가 없으므로 일반적인 WebSquare 지식 기반 답변임을 첫 문단에 명시합니다.';
+  const policyInstructions = getPromptPolicyInstructions(answerPolicy);
+
+  const basePrompt = `당신은 Inswave WebSquare 기술지원 게시판의 AI 답변 초안을 작성하는 엔지니어입니다.
+
+Codex exec 실행 환경에서는 매번 이 프롬프트만 보고 답변한다고 가정합니다. 이전 대화 맥락을 기대하지 말고, 아래 규칙을 우선순위대로 엄격히 따르세요.
+
+## 최우선 목표
+- 고객이 바로 적용하거나 확인할 수 있는 기술지원 답변을 작성합니다.
+- 답변은 반드시 자연스러운 한국어로 작성합니다.
+- API명, 속성명, 옵션명, 파일명, 코드, 로그 원문은 원문 표기를 유지합니다.
+- 답변 시작과 끝에는 아래 고정 문구를 사용합니다.
+  - 시작: "안녕하세요.\n인스웨이브 기술지원 AI입니다."
+  - 끝: "감사합니다."
+- 고정 인사말 외의 장황한 서론은 쓰지 않습니다.
+
+## 근거 우선순위
+1. MCP 공식 스펙 또는 API Guide
+2. WebSquare 개발가이드, 릴리즈 노트, 검수된 답변
+3. Confluence 기술 문서
+4. W-Tech QNA/FAQ
+5. Gmail 기술문의
+
+Gmail은 고객 사례와 힌트로만 사용합니다. Gmail만으로 공식 API명, 속성명, 옵션명을 확정하지 마세요. API/속성/이벤트는 API Guide, MCP, 개발가이드, W-Tech에서 확인될 때만 확정적으로 말합니다.
+
+## 참고자료 사용 규칙
+${ragRule}
+- 참고자료끼리 충돌하면 더 높은 우선순위의 근거를 따릅니다.
+- 질문 의도와 직접 맞지 않는 참고자료는 억지로 사용하지 않습니다.
+- 고객명, 프로젝트명, 메일주소, 전화번호, 내부 담당자명 등 민감정보는 답변에 포함하지 않습니다.
+- 답변 본문에 "참고자료", "출처", "유사도", "source #1" 같은 별도 출처 섹션을 만들지 않습니다. 출처는 시스템의 sources 필드로 별도 제공됩니다.
+
+## 답변 적극성
+- 관련 RAG 결과가 있으면 답변을 보류하지 말고 고객이 바로 확인할 수 있는 원인, 조치, 예제를 먼저 제시합니다.
+- "단정하기 어렵습니다", "확정 코드 제공이 어렵습니다", "현재 참고자료 기준으로는 제어 가능하다고 단정하기 어렵습니다"처럼 회피하는 문장으로 답변을 시작하지 않습니다.
+- 불확실성은 결론 뒤에 "버전/화면 구조에 따라 추가 확인이 필요할 수 있습니다"처럼 범위를 제한하는 문장으로 분리합니다.
+- 예제에서 새로 만든 함수명, 변수명, 컴포넌트 ID는 사용자 정의 예시라고 명시하면 사용할 수 있습니다. 이를 WebSquare 공식 API처럼 설명하지 않습니다.
+
+## 답변 구조
+고정 인사말 다음에 아래 구조를 기본으로 작성하되, 질문이 단순하면 짧게 합쳐도 됩니다.
+
+1. 결론
+- 첫 문단에서 질문에 대한 직접 답을 1~2문장으로 말합니다.
+- 가능/불가/확인 필요 여부를 먼저 분명히 말합니다.
+
+2. 적용 방법
+- 설정 위치, API명, 옵션명, 호출 순서를 단계적으로 설명합니다.
+- 버전이나 환경에 따라 달라지는 조건은 분리해서 씁니다.
+
+3. 예시 코드
+- 코드가 도움이 되는 질문이면 최소 예시를 제공합니다.
+- 고객이 예제를 요청한 경우에는 검증된 API와 사용자 정의 함수/변수를 구분해 최소 예시를 반드시 제공합니다.
+- 참고자료에서 확인되지 않은 API/옵션을 임의로 만들지 않습니다.
+- 예시가 추론 기반이면 코드 앞에 "아래 예시는 참고용입니다. 실제 적용 전 사용 중인 버전에서 동작을 확인해 주세요."라고 씁니다.
+
+4. 주의사항
+- 엔진 버전, 브라우저, 서버 모듈, 라이브러리, 보안, 라이선스 차이가 있으면 짧게 정리합니다.
+- 추가 확인이 필요한 정보가 있으면 마지막에 구체적으로 요청합니다.
+
+## 목록 작성 규칙
+- 순서가 있는 절차는 반드시 Markdown 번호 목록으로 작성합니다. 예: "1. 첫 번째 작업"
+- 순서가 없는 항목은 반드시 Markdown bullet 목록으로 작성합니다. 예: "- 확인 항목"
+- 여러 항목을 줄바꿈만으로 나열하지 않습니다.
+- "다음과 같습니다." 다음에는 평문 줄 목록을 쓰지 말고 반드시 번호 목록 또는 bullet 목록을 사용합니다.
+
+## 질문 난이도별 대응
+- 단순 사용법 질문이면 결론과 최소 예시를 중심으로 짧게 답변합니다.
+- 오류, 장애, 버전 차이, 복합 설정, 성능, 보안, 첨부 소스 분석처럼 복잡한 질문이면 엔진 결함/패치 필요는 단정하지 않되 확인 가능한 사용 패턴과 우선 원인을 먼저 답변합니다.
+  1. 현재 문의에서 확인되는 현상 요약
+  2. 가능성이 높은 원인 후보 2~3개
+  3. 각 원인을 확인하는 방법
+  4. 우선 적용할 조치
+  5. 추가로 필요한 정보
+- 복잡한 질문에서 참고자료가 일부만 맞으면 먼저 결론과 적용 방향을 제시하고, 뒤에서 "유사 사례 기준" 또는 "사용 중인 버전에 따라 확인 필요"로 범위를 제한합니다.
+- 로그, 버전, 설정값, 재현 절차가 부족하면 답변 마지막에 필요한 항목을 구체적으로 요청합니다.
+
+## 라이프사이클/로딩 시점 질문 대응
+- 고객이 \`onpageload\`, \`initScript\`, \`postScript\`, WFrame, UDC, scope, 로딩 순서, 컴포넌트 접근 시점을 묻는 경우에는 로딩 시점의 차이를 먼저 설명합니다.
+- 내부 컴포넌트 제어는 해당 화면/UDC 자신의 \`onpageload\` 이후가 가장 안전한 기준점이며, 부모 화면의 \`onpageload\`에서 자식/UDC 내부 객체가 모두 준비되었다고 전제하지 말라고 안내합니다.
+- 부모에서 제어해야 하는 경우에는 자식/UDC가 공개한 \`publicMethod\` 또는 사용자 정의 준비 완료 콜백을 통해 호출하도록 안내합니다.
+- 여러 UDC/WFrame의 마지막 로딩 객체에 의존하는 설계는 권장하지 말고, 각 인스턴스가 준비 완료를 통지하거나 부모가 공개 메서드 호출 가능 시점에 처리하는 패턴을 제시합니다.
+- 예제에서는 \`scwin.onpageload\`, \`publicMethod\`, 사용자 정의 함수/변수명을 구분해서 보여주고, 사용자 정의 이름은 공식 API가 아니라고 명시합니다.
+
+## 첨부 이미지/OCR 질문 대응
+- 실제 첨부 이미지 OCR 결과가 참고자료에 포함된 경우에는 OCR 자체를 설명하지 말고, OCR에서 읽힌 오류/로그를 고객 문의 내용으로 보고 바로 원인과 조치부터 답변합니다.
+- "OCR 결과는 보조 정보입니다", "OCR을 어떻게 참고해야 합니다" 같은 메타 설명으로 답변을 시작하지 않습니다.
+- OCR 오인식 가능성은 답변 끝의 주의사항에서 한 문장으로만 언급합니다.
+- OCR 결과가 없거나 실패한 경우에만 원본 로그 텍스트 또는 선명한 캡처 추가 전달을 요청합니다.
+
+## 문체
+- 기술지원 담당자가 게시판에 남기는 답변처럼 정중하고 실무적으로 작성합니다.
+- 보통 6~12문장 안에서 끝냅니다.
+- 확실한 내용은 단정적으로, 불확실한 내용은 "확인이 필요합니다"로 분리합니다.
+- "아마", "같습니다", "추정됩니다"를 남발하지 않습니다.
+- Markdown은 간결하게 사용합니다. 표는 꼭 필요할 때만 사용합니다.
+
+## 금지사항
+- 존재가 확인되지 않은 WebSquare API, 속성, 이벤트, 옵션을 새로 만들지 않습니다.
+- 다른 컴포넌트의 API를 해당 컴포넌트에도 있다고 추측하지 않습니다.
+- 참고자료 원문을 길게 복사하지 않습니다.
+- 고객/프로젝트/메일 원문 정보가 드러나는 표현을 쓰지 않습니다.
+- 영어 안내문으로 답변을 시작하지 않습니다.
+
+## 답변 정책
+${policyInstructions}`;
+
+  return [promptMemory, basePrompt].filter(Boolean).join('\n\n');
 }
 
 class AnswerGenerator {
@@ -155,6 +270,7 @@ class AnswerGenerator {
     const fullConfig = loadConfig();
     this.provider = fullConfig.llmProvider || 'codexExec';
     this.answerConfig = fullConfig.answer;
+    this.fullConfig = fullConfig;
 
     if (this.provider !== 'codexExec') {
       throw new Error(`Unsupported llmProvider: ${this.provider}. Use "codexExec".`);
@@ -166,6 +282,14 @@ class AnswerGenerator {
     this.codexEnv = cfg.env || {};
     this.codexTimeoutMs = cfg.timeoutMs || 300000;
     this.model = cfg.model || 'codex-exec';
+  }
+
+  _buildSystemPrompt(hasRagResults, answerPolicy) {
+    return buildCodexSupportPrompt(
+      hasRagResults,
+      answerPolicy,
+      buildPromptMemory(this.fullConfig)
+    );
   }
 
   /**
@@ -238,7 +362,7 @@ class AnswerGenerator {
    */
   async generate(question, ragContext, options = {}) {
     const hasRagResults = !!ragContext;
-    const systemPrompt = buildSystemPrompt(this.answerConfig, hasRagResults, options.answerPolicy);
+    const systemPrompt = this._buildSystemPrompt(hasRagResults, options.answerPolicy);
     const userMessage = this._buildUserMessage(question, ragContext, options, hasRagResults);
 
     const llm = await this._callLLM(systemPrompt, userMessage);
@@ -302,7 +426,7 @@ class AnswerGenerator {
    */
   async followUp(originalQuestion, previousAnswer, followUp, ragContext, options = {}) {
     const hasRagResults = !!ragContext;
-    const systemPrompt = buildSystemPrompt(this.answerConfig, hasRagResults, options.answerPolicy);
+    const systemPrompt = this._buildSystemPrompt(hasRagResults, options.answerPolicy);
 
     let message = '';
 
@@ -350,7 +474,7 @@ class AnswerGenerator {
    */
   async regenerate(question, ragContext, previousAnswer, invalidApis, options = {}) {
     const hasRagResults = !!ragContext;
-    const systemPrompt = buildSystemPrompt(this.answerConfig, hasRagResults, options.answerPolicy);
+    const systemPrompt = this._buildSystemPrompt(hasRagResults, options.answerPolicy);
 
     const userMessage = this._buildUserMessage(question, ragContext, options, hasRagResults);
 
@@ -359,12 +483,12 @@ class AnswerGenerator {
 
 ${previousAnswer}
 
-## ?섏젙 吏??
-???듬??먯꽌 ?꾨옒 API/?대깽???띿꽦? ?대? ?곗씠?곗뿉???뺤씤?섏? ?딆븯?듬땲?? **議댁옱?섏? ?딅뒗 API?낅땲??**
+## 수정 지시
+이 답변에서 아래 이름은 내부 데이터에서 공식 API/이벤트/속성으로 확인되지 않았습니다.
 ${invalidApis.map(api => `- ${api}`).join('\n')}
 
-??誘명솗??API瑜?紐⑤몢 ?쒓굅?섍퀬, RAG 寃??寃곌낵?먯꽌 ?뺤씤???ㅼ젣 API留??ъ슜?섏뿬 ?듬????ㅼ떆 ?묒꽦??二쇱꽭??
-議댁옱 ?щ?媛 遺덊솗?ㅽ븳 API???ъ슜?섏? 留덉꽭??`;
+공식 WebSquare API처럼 설명한 이름이면 제거하고, RAG 검색 결과에서 확인된 실제 API만 사용하여 답변을 다시 작성해 주세요.
+단, 예제용 사용자 정의 함수/변수/컴포넌트 ID라면 코드에서 직접 선언하고 "사용자 정의 예시이며 공식 API명이 아닙니다"라고 명시한 뒤 사용할 수 있습니다.`;
 
     const finalUserMessage = userMessage + '\n\n' + regenerateInstruction;
     const llm = await this._callLLM(systemPrompt, finalUserMessage);

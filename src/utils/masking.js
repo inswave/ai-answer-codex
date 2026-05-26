@@ -39,8 +39,9 @@ function maskLineFields(text) {
  * @param {string} text - 원본 텍스트
  * @returns {string} - 마스킹된 텍스트
  */
-function maskSensitiveInfo(text) {
+function maskSensitiveInfo(text, options = {}) {
   if (!text || typeof text !== 'string') return '';
+  const maskFilenames = options.maskFilenames !== false;
 
   let masked = text;
   masked = masked.replace(SECRET_KEY_PATTERN, (_, key) => `${key}: [비밀값]`);
@@ -51,17 +52,19 @@ function maskSensitiveInfo(text) {
   masked = masked.replace(IP_PATTERN, '[서버주소]');
   masked = masked.replace(URL_PATTERN, '[URL]');
   masked = maskLineFields(masked);
-  masked = masked.replace(FILENAME_PATTERN, '[첨부파일]');
+  if (maskFilenames) {
+    masked = masked.replace(FILENAME_PATTERN, '[첨부파일]');
+  }
 
   return masked;
 }
 
-function maskObjectSensitiveInfo(value) {
-  if (typeof value === 'string') return maskSensitiveInfo(value);
-  if (Array.isArray(value)) return value.map(maskObjectSensitiveInfo);
+function maskObjectSensitiveInfo(value, options = {}) {
+  if (typeof value === 'string') return maskSensitiveInfo(value, options);
+  if (Array.isArray(value)) return value.map((item) => maskObjectSensitiveInfo(item, options));
   if (value && typeof value === 'object') {
     return Object.fromEntries(
-      Object.entries(value).map(([key, item]) => [key, maskObjectSensitiveInfo(item)])
+      Object.entries(value).map(([key, item]) => [key, maskObjectSensitiveInfo(item, options)])
     );
   }
   return value;
