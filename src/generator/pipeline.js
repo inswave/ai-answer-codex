@@ -13,6 +13,7 @@ const { addToQueue } = require('../api/queue');
 const { parseRagResults, buildRagContext } = require('../rag/parseRagResults');
 const { maskSensitiveInfo } = require('../utils/masking');
 const {
+  MODES,
   evaluateAnswerPolicy,
   appendPolicyNotice,
 } = require('./answerPolicy');
@@ -76,6 +77,44 @@ class AnswerPipeline {
 
     const classification = this.classifier.classify({ question: safeQuestion, answer: '' });
     console.log(`[Pipeline] classification: ${classification.categoryLabel} > ${classification.subcategoryLabel}`);
+
+    // [2026-06-01] 서비스 요청(라이선스/데모/엔진·플러그인 파일 제공/계약·권한 등)은 기술 답변(RAG/Claude) 대상이 아님.
+    //   질문 기준으로 먼저 판정해 BLOCKED면 RAG/LLM 스킵 + 참고자료 없이 담당자 안내 템플릿만 반환.
+    const precheck = evaluateAnswerPolicy({ question: safeQuestion, cases: [] });
+    if (precheck.answerMode === MODES.BLOCKED) {
+      console.log('[Pipeline] BLOCKED 서비스 요청 → RAG/LLM 스킵, 템플릿 응답(참고자료 없음)');
+      // 일반 답변과 동일한 인사말/맺음말을 쓰도록 config.answer 템플릿을 코드로 적용 (LLM 안 거치므로 직접 치환)
+      const answerCfg = (loadConfig() || {}).answer || {};
+      const responderName = answerCfg.responderName || 'AI 답변';
+      const answerTemplate = answerCfg.template
+        || '안녕하세요.\n인스웨이브 기술지원팀 {{name}}입니다.\n\n{{content}}\n\n감사합니다.';
+      const blockedBody = '문의해 주신 내용은 담당 엔지니어 확인이 필요한 사안입니다.\n엔지니어 추가 답변 요청을 부탁드립니다.';
+      const blockedAnswer = answerTemplate
+        .replace('{{name}}', responderName)
+        .replace('{{topic}}', '요청하신 사항')
+        .replace('{{content}}', blockedBody);
+      return {
+        question: safeQuestion,
+        classification,
+        ragResults: { context: '', resultCount: 0, cases: [] },
+        mcpContext: { enabled: false, available: false, items: [], sources: [], errors: [] },
+        attachmentContext: { context: '', summary: { total: 0 }, policyText: '' },
+        answer: blockedAnswer,
+        hasRagResults: false,
+        sources: [],
+        usage: { inputTokens: 0, outputTokens: 0 },
+        model: null,
+        verification: { verified: [], unverified: [], summary: 'skipped (blocked service request)' },
+        questionTermVerification: { verified: [], unverified: [] },
+        answerPolicy: precheck,
+        answerMode: precheck.answerMode,
+        riskLevel: precheck.riskLevel,
+        needsHumanReview: precheck.needsHumanReview,
+        reviewReasons: precheck.reviewReasons,
+        requiredInfo: precheck.requiredInfo,
+        savedPath: null,
+      };
+    }
 
     const ragResult = this._searchRAGMultiStep(safeQuestion, options);
     const safeRagContext = maskSensitiveInfo(ragResult.context);

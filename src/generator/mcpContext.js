@@ -24,7 +24,6 @@ const COMPONENT_ALIASES = [
   { pattern: /\bdata\s*list\b|\bdataList\b|데이터리스트/i, component: 'dataList' },
   { pattern: /\bdata\s*map\b|\bdataMap\b|데이터맵/i, component: 'dataMap' },
   { pattern: /\bsubmission\b|서브미션|서버\s*요청/i, component: 'Submission' },
-  { pattern: /\$p\b|openPopup|executeSubmission/i, component: '$p' },
   { pattern: /\bWebSquare\.net\b|\bWebSquare\/net\b/i, component: 'WebSquare/net' },
   { pattern: /\binputCalendar\b|인풋캘린더|캘린더/i, component: 'inputCalendar' },
   { pattern: /\bautoComplete\b|autocomplate|자동완성/i, component: 'autoComplete' },
@@ -42,17 +41,56 @@ const COMPONENT_ALIASES = [
   // alias 누락 보강 — 평가에서 미매칭이었던 케이스 대응
   { pattern: /\bgroup\b|그룹\s*(컴포넌트)?|grp_/i, component: 'group' },
   { pattern: /\bfusionchart\b|퓨전차트|퓨전\s*차트/i, component: 'fusionchart' },
-  { pattern: /\bchart\b|차트(?!\s*리소스)/i, component: 'chart' },
   { pattern: /\beditor\b|CKfinder|CKEditor|에디터/i, component: 'editor' },
   // 유틸리티 클래스 — showModal/showProcessMessage 등은 실제로 $p에 속함
   { pattern: /\bWebSquare\.layer\b|\bWebSquare\/layer\b/i, component: 'WebSquare/layer' },
   { pattern: /\bWebSquare\.util\b|\bWebSquare\/util\b/i, component: 'WebSquare/util' },
   { pattern: /\bWebSquare\.xml\b|\bWebSquare\/xml\b/i, component: 'WebSquare/xml' },
   { pattern: /\bWebSquare\.date\b|\bWebSquare\/date\b/i, component: 'WebSquare/date' },
-  { pattern: /\$p\.|openMenu|getParameter|setParameter|getValueObj|showProcessMessage|showModal|hideProcessMessage|hideModal/i, component: '$p' },
+  // Phase 3 (5/27) 추가 — 유틸 4개
+  { pattern: /\bWebSquare\.json\b|\bWebSquare\/json\b/i, component: 'WebSquare/json' },
+  { pattern: /\bWebSquare\.cookie\b|\bWebSquare\/cookie\b|쿠키/i, component: 'WebSquare/cookie' },
+  { pattern: /\bWebSquare\.logger\b|\bWebSquare\/logger\b|로거/i, component: 'WebSquare/logger' },
+  { pattern: /\bWebSquare\.style\b|\bWebSquare\/style\b/i, component: 'WebSquare/style' },
+  { pattern: /\$p\.data\b|\$p\/data\b/i, component: '$p/data' },
+  // Phase 3 (5/27) 추가 — 입력 8개
+  { pattern: /\bcheckbox\b|체크박스|체크 박스/i, component: 'checkbox' },
+  { pattern: /\bradio\b|라디오\s*(버튼)?/i, component: 'radio' },
+  { pattern: /\bmultiselect\b|multiSelect|멀티셀렉트|다중\s*선택/i, component: 'multiselect' },
+  { pattern: /\bsearchbox\b|searchBox|서치박스|검색박스/i, component: 'searchbox' },
+  { pattern: /\bsecret\b|시크릿|비밀번호\s*(입력)?|패스워드/i, component: 'secret' },
+  { pattern: /\bfloatingLayer\b|floating\s*layer|플로팅\s*레이어|플로팅레이어/i, component: 'floatingLayer' },
+  // input은 'input' 단어가 너무 흔해 위험. inputType/input box는 제외하고 컴포넌트 명시만 매칭
+  { pattern: /<(?:xf:|w2:)input\b|\binput\s*컴포넌트|\binput[12]\b/i, component: 'input' },
+  // Phase 3 (5/27) 추가 — 컨테이너 3개
+  { pattern: /\bnameLayer\b|nameLayer|네임\s*레이어|선택영역|nameLayer 영역/i, component: 'nameLayer' },
+  { pattern: /\bgridLayout\b|gridLayout|그리드\s*레이아웃/i, component: 'gridLayout' },
+  { pattern: /\bscrollView\b|scrollView|스크롤\s*뷰/i, component: 'scrollView' },
+  // Phase 3 (5/27) 추가 — 캘린더 2개 (scheduleCalendar는 위쪽에 이미 있음)
+  { pattern: /\bdatePicker\b|datePicker|날짜\s*선택기|데이트피커/i, component: 'datePicker' },
+  { pattern: /\bcalendar\b(?!.*input|.*schedule)|캘린더(?!\s*(인풋|스케줄))/i, component: 'calendar' },
+  // Phase 3 (5/27) 추가 — 차트 8개
+  // 주의: fw*Chart 들은 'chart' 단어를 포함하므로, 구체적인 fw*Chart alias가 먼저 매칭되도록 순서 중요
+  { pattern: /\bmapchart\b|mapChart|지도\s*차트|맵\s*차트/i, component: 'mapchart' },
+  { pattern: /\bfwGanttChart\b|fwGantt|간트\s*차트|gantt\s*chart/i, component: 'fwGanttChart' },
+  { pattern: /\bfwBulletChart\b|fwBullet|불릿\s*차트|bullet\s*chart/i, component: 'fwBulletChart' },
+  { pattern: /\bfwFunnelChart\b|fwFunnel|퍼널\s*차트|funnel\s*chart/i, component: 'fwFunnelChart' },
+  { pattern: /\bfwGaugeChart\b|fwGauge|게이지\s*차트|gauge\s*chart/i, component: 'fwGaugeChart' },
+  { pattern: /\bfwPyramidChart\b|fwPyramid|피라미드\s*차트|pyramid\s*chart/i, component: 'fwPyramidChart' },
+  { pattern: /\bfwRealtimeChart\b|fwRealtime|실시간\s*차트|realtime\s*chart/i, component: 'fwRealtimeChart' },
+  { pattern: /\bfwSparkChart\b|fwSpark|스파크\s*차트|spark\s*chart/i, component: 'fwSparkChart' },
   // 서브컴포넌트
   { pattern: /\bgridView\/column\b|gridView\s*컬럼/i, component: 'gridView/column' },
   { pattern: /\bdataList\/column\b|dataList\s*컬럼/i, component: 'dataList/column' },
+  { pattern: /\bgridView\/header\b|gridView\s*헤더/i, component: 'gridView/header' },
+  { pattern: /\bgridView\/footer\b|gridView\s*푸터/i, component: 'gridView/footer' },
+  { pattern: /\bgridView\/row\b|gridView\s*(행|로우)/i, component: 'gridView/row' },
+  { pattern: /\bgridView\/filterColumn\b|filterColumn/i, component: 'gridView/filterColumn' },
+  { pattern: /\bgridView\/subTotal\b|subTotal|부분합/i, component: 'gridView/subTotal' },
+  { pattern: /\bgridView\/gBody\b|gBody/i, component: 'gridView/gBody' },
+  // '$p'는 가장 generic이라 맨 아래(구체 alias 뒤)에 위치 — $p/data 등이 먼저 매칭되도록.
+  // [2026-06-01] 5/27에 상세 $p alias를 "이동"하려다 "삭제"만 된 회귀 복원(버그 A: 메서드 키워드 매칭 소실).
+  { pattern: /\$p\b|openPopup|executeSubmission|openMenu|getParameter|setParameter|getValueObj|showProcessMessage|showModal|hideProcessMessage|hideModal/i, component: '$p' },
 ];
 
 const STOP_TERMS = new Set([

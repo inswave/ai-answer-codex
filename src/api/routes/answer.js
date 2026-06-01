@@ -21,10 +21,30 @@ const router = express.Router();
 const pipeline = new AnswerPipeline();
 const MAX_VISIBLE_SOURCES = 3;
 
+// [2026-06-01] 참고자료 중복 제거
+//  - 링크(url) 있는 항목 → 항상 노출(중복 제거 대상 제외)
+//  - 링크 없는 항목 → 타입(board/email/wiki 등)당 1개만 (유사도 상위가 먼저라 대표 1건 유지)
+//  - 그 다음 최대 MAX_VISIBLE_SOURCES(3)개로 cap
+function dedupVisibleSources(sources) {
+  const seenLinklessTypes = new Set();
+  const out = [];
+  for (const s of sources) {
+    if (s.url) {
+      out.push(s);
+    } else {
+      if (seenLinklessTypes.has(s.type)) continue;
+      seenLinklessTypes.add(s.type);
+      out.push(s);
+    }
+  }
+  return out;
+}
+
 function toVisibleSources(query, cases) {
-  return toSources(cases, {
+  const all = toSources(cases, {
     includeAttachments: shouldIncludeSampleFiles(query),
-  }).slice(0, MAX_VISIBLE_SOURCES);
+  });
+  return dedupVisibleSources(all).slice(0, MAX_VISIBLE_SOURCES);
 }
 
 function buildVisibleSampleFiles(query, cases) {

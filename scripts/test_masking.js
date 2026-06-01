@@ -14,7 +14,7 @@ const cases = [
   },
   {
     input: '작성자 홍길동 010-1234-5678',
-    expected: '작성자 [이름] [전화번호]',
+    expected: '작성자 홍길동 [전화번호]',
   },
   {
     input: 'apiKey: abc123 password=secret clientSecret xyz',
@@ -30,7 +30,7 @@ const cases = [
   },
   {
     input: '성명 홍길동',
-    expected: '성명 [이름]',
+    expected: '성명 홍길동',
   },
 ];
 
@@ -50,7 +50,7 @@ assert.deepStrictEqual(
   }),
   {
     query: '회사명/프로젝트명 [고객/프로젝트]',
-    nested: { author: '작성자 [이름]' },
+    nested: { author: '작성자 홍길동' },
   }
 );
 

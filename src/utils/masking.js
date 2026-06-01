@@ -20,10 +20,8 @@ const LINE_FIELD_PATTERNS = [
     regex: /((?:회사명\s*\/\s*프로젝트명|회사명|프로젝트명|고객사|고객사명)\s*[:：]?\s*|(?:client|company|project)\s*[:：]\s*)([^\r\n]+)/gi,
     replacement: '$1[고객/프로젝트]',
   },
-  {
-    regex: /(^|[^\p{L}\p{N}_])((?:작성자|담당자|요청자|고객명|성명|이름|author|requester|assignee|customer)\s*[:：]?\s*)([^\s,\/\r\n]+)/giu,
-    replacement: '$1$2[이름]',
-  },
+  // [2026-06-01] 이름 필드 마스킹 제거 — 답변엔 "담당자: 이름" 같은 구조가 나오지 않아 가릴 대상이 없고,
+  //   콜론이 선택이라 산문("담당자 확인 후", "담당자가 검토")까지 매칭해 엉뚱한 단어를 [이름]으로 오삽입하던 버그가 있었음.
 ];
 
 function maskLineFields(text) {
