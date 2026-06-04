@@ -702,6 +702,22 @@ async function convertReleaseNoteFulltext() {
   return results;
 }
 
+// 첨부 후보 확장자
+const ATTACH_EXT_RE = /\.(xml|pdf|png|jpg|jpeg|gif|svg|html|txt|json)$/i;
+
+// 한 샘플(sampleName)에 해당하는 첨부만 추린다.
+//  - 같은 베이스이름의 파일(예: foo.xml + foo.pdf)을 모두 포함
+//  - 폴더에 다른 샘플 파일이 섞여 있어도 통째로 달지 않는다.
+function sampleAttachments(allFiles, dir, sampleName) {
+  return allFiles
+    .filter(f => ATTACH_EXT_RE.test(f) && f.replace(/\.[^.]+$/, '') === sampleName)
+    .map(f => {
+      let size = 0;
+      try { size = fsSync.statSync(path.join(dir, f)).size; } catch { /* size 0 유지 */ }
+      return { filename: f, mimeType: guessMimeType(f), size };
+    });
+}
+
 // ── 개발가이드 샘플 XML ──
 async function convertDevGuideSamples() {
   const sampleDir = path.join(RAW_DIR, 'dev-guide-sample');
@@ -728,20 +744,15 @@ async function convertDevGuideSamples() {
         try { allFiles = await fs.readdir(subPath); } catch { continue; }
         const xmlFiles = allFiles.filter(f => f.endsWith('.xml'));
 
-        // 같은 폴더의 모든 첨부 후보 (XML 본문 + PDF/이미지 등 다른 형식 파일)
-        const folderAttachments = allFiles
-          .filter(f => /\.(xml|pdf|png|jpg|jpeg|gif|svg|html|txt|json)$/i.test(f))
-          .map(f => ({
-            filename: f,
-            mimeType: guessMimeType(f),
-            size: 0,
-          }));
-
         for (const file of xmlFiles) {
           const content = await fs.readFile(path.join(subPath, file), 'utf8');
           if (content.length < 30) continue;
 
           const sampleName = file.replace('.xml', '');
+          // [2026-06-04] 폴더 전체가 아니라 이 샘플(sampleName) 자신의 파일만 첨부한다.
+          //   같은 이름의 동반 파일(.pdf/.png 등)은 함께 달되, 한 폴더에 여러 샘플이
+          //   섞여 있어도 다른 샘플 파일까지 통째로 달지 않는다(링크 도배 방지).
+          const ownAttachments = sampleAttachments(allFiles, subPath, sampleName);
           const item = {
             category: '',
             subcategory: '',
@@ -751,8 +762,8 @@ async function convertDevGuideSamples() {
             date: '',
             tags: extractTags(component + ' ' + sub + ' ' + sampleName),
           };
-          if (folderAttachments.length > 0) {
-            item.attachments = folderAttachments;
+          if (ownAttachments.length > 0) {
+            item.attachments = ownAttachments;
             item.attachmentDir = `dev-guide-sample/${component}/${sub}`;
           }
           results.push(item);
@@ -770,7 +781,7 @@ async function convertDevGuideSamples() {
           answer: content.substring(0, 3000),
           source: '개발가이드 샘플',
           date: '',
-          attachments: [{ filename: sub, mimeType: 'application/xml', size: 0 }],
+          attachments: sampleAttachments(subItems, compDir, sampleName),
           attachmentDir: `dev-guide-sample/${component}`,
           tags: extractTags(component + ' ' + sampleName),
         });
