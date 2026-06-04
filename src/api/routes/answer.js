@@ -41,9 +41,10 @@ function dedupVisibleSources(sources) {
 }
 
 function toVisibleSources(query, cases) {
-  const all = toSources(cases, {
-    includeAttachments: shouldIncludeSampleFiles(query),
-  });
+  // [2026-06-04] 다운로드 링크는 항상 부착한다. toSources는 isSampleAttachmentCase
+  //   (dev-guide-sample/ 출처)에만 첨부를 붙이므로, 질문에 '샘플/예제' 키워드가
+  //   없어도 개발가이드 샘플 출처에는 링크가 붙고 다른 출처엔 영향이 없다.
+  const all = toSources(cases, { includeAttachments: true });
   return dedupVisibleSources(all).slice(0, MAX_VISIBLE_SOURCES);
 }
 

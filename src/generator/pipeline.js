@@ -142,9 +142,11 @@ class AnswerPipeline {
       safeRagContext ? 'RAG' : null,
       ...mcpContext.sources,
     ].filter(Boolean);
+    // [2026-06-02] 위험도 격상은 사용자 질문(+첨부)만 기준으로 판정한다.
+    //   RAG 이웃 사례 본문을 cases로 넘기면 사례에 섞인 패치/접근성 등 키워드가
+    //   멀쩡한 질문을 human_review/blocked로 오격상시키므로 cases를 넘기지 않는다.
     const answerPolicy = evaluateAnswerPolicy({
       question: [safeQuestion, attachmentContext.policyText].filter(Boolean).join('\n\n'),
-      cases: ragResult.cases,
     });
     console.log(`[Pipeline] answer policy: ${answerPolicy.answerMode} (${answerPolicy.riskLevel})`);
 
@@ -271,9 +273,9 @@ class AnswerPipeline {
       safeRagContext ? 'RAG' : null,
       ...mcpContext.sources,
     ].filter(Boolean);
+    // [2026-06-02] follow-up도 동일하게 질문(원질문+추가질문+첨부)만 기준으로 판정한다.
     const answerPolicy = evaluateAnswerPolicy({
       question: [safeOriginalQuestion, safeFollowUp, attachmentContext.policyText].filter(Boolean).join('\n\n'),
-      cases: ragResult.cases,
     });
     console.log(`[Pipeline] follow-up answer policy: ${answerPolicy.answerMode} (${answerPolicy.riskLevel})`);
 

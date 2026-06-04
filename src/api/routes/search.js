@@ -54,9 +54,9 @@ function buildVisibleSampleFiles(query, cases) {
 }
 
 function buildVisibleSources(query, cases) {
-  return toSources(cases, {
-    includeAttachments: shouldIncludeSampleFiles(query),
-  });
+  // [2026-06-04] 다운로드 링크는 항상 부착한다(answer.js와 동일). toSources는
+  //   dev-guide-sample/ 출처에만 첨부를 붙이므로 키워드 게이트 없이도 안전하다.
+  return toSources(cases, { includeAttachments: true });
 }
 
 // POST /api/search — 통일 스펙
