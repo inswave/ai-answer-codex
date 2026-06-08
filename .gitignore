@@ -15,3 +15,6 @@ __pycache__/
 
 .DS_Store
 Thumbs.db
+
+# 워치독 설정(웹훅 시크릿) — 커밋 금지
+scripts/watchdog.conf
