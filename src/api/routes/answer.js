@@ -49,8 +49,12 @@ function toVisibleSources(query, cases) {
   // [2026-06-04] 다운로드 링크는 항상 부착한다. toSources는 isSampleAttachmentCase
   //   (dev-guide-sample/ 출처)에만 첨부를 붙이므로, 질문에 '샘플/예제' 키워드가
   //   없어도 개발가이드 샘플 출처에는 링크가 붙고 다른 출처엔 영향이 없다.
+  // title/meta 뿐 아니라 url 도 검사 — 실데이터에서 meta 라벨에 '내부용' 이 없고
+  // url(.../wiki/spaces/TechDBinside/...)에만 식별자가 드러나는 케이스가 있음
   const all = toSources(cases, { includeAttachments: true })
-    .filter(s => !INTERNAL_ONLY_SOURCE.test(String(s.meta || '')) && !INTERNAL_ONLY_SOURCE.test(String(s.title || '')));
+    .filter(s => !INTERNAL_ONLY_SOURCE.test(
+      String(s.meta || '') + ' ' + String(s.title || '') + ' ' + String(s.url || '')
+    ));
   return dedupVisibleSources(all).slice(0, MAX_VISIBLE_SOURCES);
 }
 
