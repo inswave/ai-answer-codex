@@ -40,11 +40,17 @@ function dedupVisibleSources(sources) {
   return out;
 }
 
+// [2026-06-12] 내부 전용 출처는 고객 노출 sources 에서 제외 — Confluence 기술지식DB(내부용)/TechDBinside 는
+// 외부 고객이 접근 불가한 링크라 보여줘도 의미가 없음. 답변 생성 컨텍스트(RAG cases)에는 그대로 활용되고,
+// 노출 목록에서만 빠지므로 다음 순위 후보가 그 자리를 채운다.
+const INTERNAL_ONLY_SOURCE = /내부용|TechDBinside/i;
+
 function toVisibleSources(query, cases) {
   // [2026-06-04] 다운로드 링크는 항상 부착한다. toSources는 isSampleAttachmentCase
   //   (dev-guide-sample/ 출처)에만 첨부를 붙이므로, 질문에 '샘플/예제' 키워드가
   //   없어도 개발가이드 샘플 출처에는 링크가 붙고 다른 출처엔 영향이 없다.
-  const all = toSources(cases, { includeAttachments: true });
+  const all = toSources(cases, { includeAttachments: true })
+    .filter(s => !INTERNAL_ONLY_SOURCE.test(String(s.meta || '')) && !INTERNAL_ONLY_SOURCE.test(String(s.title || '')));
   return dedupVisibleSources(all).slice(0, MAX_VISIBLE_SOURCES);
 }
 
