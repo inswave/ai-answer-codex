@@ -9,9 +9,6 @@ import sys
 import io
 from pathlib import Path
 
-# Windows cp949 인코딩 에러 방지
-sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
-
 import chromadb
 from sentence_transformers import SentenceTransformer
 from rank_bm25 import BM25Okapi
@@ -259,8 +256,46 @@ class RAGSearcher:
         }
 
 
+def render_cli_output(result):
+    """검색 결과를 CLI(stdout)와 동일한 텍스트로 직렬화.
+
+    parseRagResults.js가 파싱하는 포맷을 CLI/상주서버가 공유하기 위한 함수.
+    기존 main()의 print 출력과 바이트 단위로 동일하게 맞춘다.
+    """
+    lines = []
+    lines.append("")
+    lines.append(f"검색 쿼리: {result['query']}")
+    lines.append(f"검색 결과: {result['result_count']}건")
+    lines.append("")
+
+    for r in result["results"]:
+        v = r.get("vector_score", 0)
+        b = r.get("bm25_score", 0)
+        meta = r["metadata"]
+        lines.append(f"#{r['rank']} [최종: {r['score']:.4f} | 벡터: {v:.4f} | BM25: {b:.4f}] {meta.get('source', '')}")
+        lines.append(f"  질문: {meta.get('question', '')[:100]}")
+        url = meta.get("url", "")
+        if url:
+            lines.append(f"  URL: {url}")
+        attachment_dir = meta.get("attachmentDir", "")
+        if attachment_dir:
+            lines.append(f"  AttachmentDir: {attachment_dir}")
+        attachments_json = meta.get("attachments", "")
+        if attachments_json:
+            lines.append(f"  Attachments: {attachments_json}")
+        doc = r.get("document", "")
+        if doc:
+            lines.append(f"  답변: {doc[:500]}")
+        lines.append("")
+
+    return "\n".join(lines)
+
+
 def main():
     """CLI 검색 테스트"""
+    # Windows cp949 인코딩 에러 방지 (CLI 전용. 모듈 임포트 시 전역 stdout을 건드리지 않도록 main 안에서 설정)
+    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
+
     import argparse
 
     parser = argparse.ArgumentParser(description="RAG 하이브리드 검색")
@@ -272,28 +307,7 @@ def main():
     searcher = RAGSearcher()
     result = searcher.search_with_context(args.query, args.top_k, args.category)
 
-    print(f"\n검색 쿼리: {result['query']}")
-    print(f"검색 결과: {result['result_count']}건\n")
-
-    for r in result["results"]:
-        v = r.get("vector_score", 0)
-        b = r.get("bm25_score", 0)
-        meta = r["metadata"]
-        print(f"#{r['rank']} [최종: {r['score']:.4f} | 벡터: {v:.4f} | BM25: {b:.4f}] {meta.get('source', '')}")
-        print(f"  질문: {meta.get('question', '')[:100]}")
-        url = meta.get("url", "")
-        if url:
-            print(f"  URL: {url}")
-        attachment_dir = meta.get("attachmentDir", "")
-        if attachment_dir:
-            print(f"  AttachmentDir: {attachment_dir}")
-        attachments_json = meta.get("attachments", "")
-        if attachments_json:
-            print(f"  Attachments: {attachments_json}")
-        doc = r.get("document", "")
-        if doc:
-            print(f"  답변: {doc[:500]}")
-        print()
+    print(render_cli_output(result))
 
 
 if __name__ == "__main__":

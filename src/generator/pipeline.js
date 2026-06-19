@@ -4,6 +4,8 @@
  */
 
 const { execFileSync } = require('child_process');
+const crypto = require('crypto');
+const http = require('http');
 const fs = require('fs');
 const path = require('path');
 const Classifier = require('../classifier/classifier');
@@ -34,6 +36,115 @@ const REFINEMENT_DEFAULTS = {
   maxRefinementSearches: 2,
 };
 
+// [2026-06-19] 상주 RAG 검색 서버 (방안2). 임베딩 모델을 매 요청 콜드로딩하던 ~18초를 제거.
+//   서버가 없거나 실패하면 _searchRAG가 기존 Python subprocess 방식으로 자동 폴백한다.
+const RAG_SERVER_DEFAULTS = {
+  enabled: true,
+  host: '127.0.0.1',
+  port: 8765,
+  // 정상이면 수백 ms. 이를 넘으면 빠르게 폴백하도록 짧게 둔다(폴백 실효성 확보).
+  timeoutMs: 15000,
+};
+
+// 상주 RAG 서버에 검색 요청 → CLI와 동일한 텍스트(stdout 포맷) 반환.
+function httpRagSearch(config, query, options) {
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    const done = (err, value) => {
+      if (settled) return;       // 이중 settle(타임아웃→destroy→error) 방어
+      settled = true;
+      if (err) reject(err);
+      else resolve(value);
+    };
+
+    const body = JSON.stringify({
+      query,
+      topK: options.topK || 8,
+      category: options.categoryFilter || null,
+    });
+    const req = http.request(
+      {
+        host: config.host,
+        port: config.port,
+        path: '/search',
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Content-Length': Buffer.byteLength(body),
+        },
+        timeout: config.timeoutMs,
+      },
+      (res) => {
+        let data = '';
+        res.setEncoding('utf8');
+        res.on('data', (chunk) => { data += chunk; });
+        res.on('end', () => {
+          if (res.statusCode === 200) done(null, data);
+          else done(new Error(`RAG server status ${res.statusCode}: ${data.slice(0, 200)}`));
+        });
+      }
+    );
+    req.on('error', (err) => done(err));
+    req.on('timeout', () => { req.destroy(new Error('RAG server timeout')); });
+    req.write(body);
+    req.end();
+  });
+}
+
+// [2026-06-19] 답변 캐시 (방안1-D): 동일 질문 재요청 시 codex/RAG 스킵하고 즉시 반환.
+//   - 추가 비용 0원, 디스크 JSON 파일 1개로 프로세스 재시작 후에도 유지.
+//   - config.answerCache 로 끄거나 TTL 조정 가능. 첨부가 있는 질문은 캐시 제외(OCR 결과 가변).
+const ANSWER_CACHE_DEFAULTS = {
+  enabled: true,
+  ttlMs: 30 * 24 * 60 * 60 * 1000, // 30일
+  maxEntries: 500,
+};
+const ANSWER_CACHE_PATH = path.join(__dirname, '../../data/cache/answer-cache.json');
+
+function normalizeQuestionForCache(question) {
+  // 기술 질문은 괄호/점/언더스코어 등이 의미 구별자(예: grid.setEnable(true))이므로 제거하지 않는다.
+  // 공백 정규화 + 소문자화만 적용해 의미가 다른 질문이 같은 키를 갖지 않도록 한다.
+  return String(question || '')
+    .toLowerCase()
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function buildAnswerCacheKey(question, options = {}) {
+  const basis = JSON.stringify({
+    q: normalizeQuestionForCache(question),
+    v: options.version || '',
+    l: JSON.stringify(options.libraries ?? null),
+    c: options.categoryFilter || '',
+  });
+  return crypto.createHash('sha1').update(basis).digest('hex');
+}
+
+function readAnswerCache() {
+  try {
+    if (!fs.existsSync(ANSWER_CACHE_PATH)) return {};
+    return JSON.parse(fs.readFileSync(ANSWER_CACHE_PATH, 'utf8')) || {};
+  } catch (_) {
+    return {};
+  }
+}
+
+function writeAnswerCache(store, maxEntries) {
+  try {
+    let entries = Object.entries(store);
+    // 오래된 항목부터 잘라 maxEntries 유지
+    if (entries.length > maxEntries) {
+      entries = entries
+        .sort((a, b) => (b[1].savedAt || 0) - (a[1].savedAt || 0))
+        .slice(0, maxEntries);
+    }
+    fs.mkdirSync(path.dirname(ANSWER_CACHE_PATH), { recursive: true });
+    fs.writeFileSync(ANSWER_CACHE_PATH, JSON.stringify(Object.fromEntries(entries), null, 2), 'utf8');
+  } catch (err) {
+    console.warn('[Pipeline] answer cache write failed:', err.message);
+  }
+}
+
 function buildQuestionTermContext(questionTermVerification) {
   const unverified = questionTermVerification?.unverified || [];
   if (unverified.length === 0) return '';
@@ -61,6 +172,17 @@ class AnswerPipeline {
       ...REFINEMENT_DEFAULTS,
       ...(cfg.refinement || {}),
     };
+    this.answerCacheConfig = {
+      ...ANSWER_CACHE_DEFAULTS,
+      ...(cfg.answerCache || {}),
+    };
+    this.ragServerConfig = {
+      ...RAG_SERVER_DEFAULTS,
+      ...(cfg.ragServer || {}),
+    };
+    if (process.env.RAG_SERVER_PORT) {
+      this.ragServerConfig.port = Number(process.env.RAG_SERVER_PORT);
+    }
   }
 
   /**
@@ -72,8 +194,21 @@ class AnswerPipeline {
    */
   async process(question, options = {}) {
     console.log('[Pipeline] start');
+    const __t0 = Date.now();
 
     const safeQuestion = maskSensitiveInfo(question);
+
+    // [2026-06-19] 캐시 조회 (방안1-D). 첨부 없는 질문만 대상.
+    const cacheEligible = this.answerCacheConfig.enabled && (options.attachments || []).length === 0;
+    const cacheKey = cacheEligible ? buildAnswerCacheKey(safeQuestion, options) : null;
+    if (cacheEligible) {
+      const store = readAnswerCache();
+      const hit = store[cacheKey];
+      if (hit && (Date.now() - (hit.savedAt || 0)) < this.answerCacheConfig.ttlMs) {
+        console.log(`[Pipeline] cache hit → codex/RAG 스킵, 즉시 반환 [done in ${Date.now() - __t0}ms, cache]`);
+        return { ...hit.result, fromCache: true };
+      }
+    }
 
     const classification = this.classifier.classify({ question: safeQuestion, answer: '' });
     console.log(`[Pipeline] classification: ${classification.categoryLabel} > ${classification.subcategoryLabel}`);
@@ -93,6 +228,7 @@ class AnswerPipeline {
         .replace('{{name}}', responderName)
         .replace('{{topic}}', '요청하신 사항')
         .replace('{{content}}', blockedBody);
+      console.log(`[Pipeline] done in ${Date.now() - __t0}ms (blocked)`);
       return {
         question: safeQuestion,
         classification,
@@ -116,9 +252,10 @@ class AnswerPipeline {
       };
     }
 
-    const ragResult = this._searchRAGMultiStep(safeQuestion, options);
+    const __tRag = Date.now();
+    const ragResult = await this._searchRAGMultiStep(safeQuestion, options);
     const safeRagContext = maskSensitiveInfo(ragResult.context);
-    console.log(`[Pipeline] RAG results: ${ragResult.resultCount}${ragResult.refinementUsed ? ' (with refinement)' : ''}`);
+    console.log(`[Pipeline] RAG results: ${ragResult.resultCount}${ragResult.refinementUsed ? ' (with refinement)' : ''} [${Date.now() - __tRag}ms]`);
     const mcpContext = await buildMcpContext(safeQuestion, ragResult.cases, options);
     if (mcpContext.enabled) {
       console.log(`[Pipeline] MCP context: ${mcpContext.available ? `${mcpContext.items.length} items` : 'unavailable'}`);
@@ -150,7 +287,8 @@ class AnswerPipeline {
     });
     console.log(`[Pipeline] answer policy: ${answerPolicy.answerMode} (${answerPolicy.riskLevel})`);
 
-    const MAX_RETRIES = 3;
+    const MAX_RETRIES = 1;
+    const __tGen = Date.now();
     let result = await this.generator.generate(safeQuestion, generationContext, {
       version: options.version,
       libraries: options.libraries,
@@ -158,7 +296,7 @@ class AnswerPipeline {
       questionTermVerification,
     });
     result.answer = maskSensitiveInfo(result.answer, { maskFilenames: false });
-    console.log(`[Pipeline] answer generated (${result.usage.inputTokens + result.usage.outputTokens} tokens)`);
+    console.log(`[Pipeline] answer generated (${result.usage.inputTokens + result.usage.outputTokens} tokens) [${Date.now() - __tGen}ms]`);
 
     let verification = this.verifier.verify(result.answer);
     console.log(`[Pipeline] ${verification.summary}`);
@@ -210,7 +348,7 @@ class AnswerPipeline {
       console.warn('[Pipeline] queue add failed:', err.message);
     }
 
-    return {
+    const response = {
       question: safeQuestion,
       classification,
       ragResults: { ...ragResult, context: safeRagContext },
@@ -231,6 +369,33 @@ class AnswerPipeline {
       requiredInfo: answerPolicy.requiredInfo,
       savedPath,
     };
+
+    // [2026-06-19] 캐시 저장 (방안1-D). BLOCKED/early-return 경로는 위에서 이미 빠져 캐시 안 함.
+    //   디스크 평문 저장이므로 무마스킹 원문(rawContext)·MCP 원문(items)·첨부 OCR 본문은 제외하고
+    //   재현에 필요한 마스킹 완료 필드만 저장한다.
+    if (cacheEligible && cacheKey) {
+      const cacheable = {
+        ...response,
+        ragResults: {
+          context: response.ragResults?.context || '',
+          resultCount: response.ragResults?.resultCount || 0,
+        },
+        mcpContext: {
+          enabled: !!response.mcpContext?.enabled,
+          available: !!response.mcpContext?.available,
+          sources: response.mcpContext?.sources || [],
+        },
+        attachmentContext: {
+          summary: response.attachmentContext?.summary || { total: 0 },
+        },
+      };
+      const store = readAnswerCache();
+      store[cacheKey] = { savedAt: Date.now(), result: cacheable };
+      writeAnswerCache(store, this.answerCacheConfig.maxEntries);
+    }
+
+    console.log(`[Pipeline] done in ${Date.now() - __t0}ms (total, retries=${retryCount})`);
+    return response;
   }
 
   /**
@@ -246,8 +411,9 @@ class AnswerPipeline {
     const safeFollowUp = maskSensitiveInfo(context.followUp);
 
     console.log('[Pipeline] follow-up start');
+    const __t0 = Date.now();
 
-    const ragResult = this._searchRAGMultiStep(safeFollowUp, options);
+    const ragResult = await this._searchRAGMultiStep(safeFollowUp, options);
     const safeRagContext = maskSensitiveInfo(ragResult.context);
     console.log(`[Pipeline] follow-up RAG results: ${ragResult.resultCount}${ragResult.refinementUsed ? ' (with refinement)' : ''}`);
     const mcpContext = await buildMcpContext(safeFollowUp, ragResult.cases, options);
@@ -292,7 +458,7 @@ class AnswerPipeline {
     let verification = this.verifier.verify(result.answer);
     console.log(`[Pipeline] ${verification.summary}`);
 
-    const MAX_RETRIES = 3;
+    const MAX_RETRIES = 1;
     let retryCount = 0;
     while (verification.unverified.length > 0 && retryCount < MAX_RETRIES) {
       retryCount++;
@@ -329,6 +495,7 @@ class AnswerPipeline {
       console.log(`[Pipeline] follow-up saved: ${savedPath}`);
     }
 
+    console.log(`[Pipeline] done in ${Date.now() - __t0}ms (follow-up)`);
     return {
       followUp: safeFollowUp,
       ragResults: { ...ragResult, context: safeRagContext },
@@ -352,9 +519,20 @@ class AnswerPipeline {
   }
 
   /**
-   * Run Python RAG search.
+   * RAG 검색. 상주 서버(HTTP) 우선, 실패 시 Python subprocess 폴백.
    */
-  _searchRAG(query, options) {
+  async _searchRAG(query, options) {
+    // 1) 상주 RAG 서버 우선 (콜드스타트 없음)
+    if (this.ragServerConfig.enabled) {
+      try {
+        const output = await httpRagSearch(this.ragServerConfig, query, options);
+        return this._parseRagOutput(output, options);
+      } catch (err) {
+        console.warn('[Pipeline] RAG server 사용 불가, subprocess 폴백:', err.message);
+      }
+    }
+
+    // 2) 폴백: 기존 Python 1회 실행 (느리지만 안전)
     try {
       const topK = options.topK || 8;
       const pythonPath = resolvePythonPath();
@@ -374,21 +552,28 @@ class AnswerPipeline {
         env: { ...process.env, PYTHONIOENCODING: 'utf-8', PYTHONUTF8: '1' },
       });
 
-      const cases = parseRagResults(output);
-      const fallbackCount = (output.match(/^#\d+\s/mg) || []).length;
-      const filteredContext = buildRagContext(cases, {
-        minMatch: options.minMatch,
-      });
-      return {
-        context: filteredContext,
-        rawContext: output,
-        resultCount: cases.length || fallbackCount,
-        cases,
-      };
+      return this._parseRagOutput(output, options);
     } catch (err) {
       console.warn('[Pipeline] RAG search failed:', err.message);
       return { context: '', resultCount: 0, cases: [] };
     }
+  }
+
+  /**
+   * RAG 검색기 출력(CLI/서버 공통 텍스트) → cases/context 구조로 변환.
+   */
+  _parseRagOutput(output, options = {}) {
+    const cases = parseRagResults(output);
+    const fallbackCount = (output.match(/^#\d+\s/mg) || []).length;
+    const filteredContext = buildRagContext(cases, {
+      minMatch: options.minMatch,
+    });
+    return {
+      context: filteredContext,
+      rawContext: output,
+      resultCount: cases.length || fallbackCount,
+      cases,
+    };
   }
 
   /**
@@ -398,8 +583,8 @@ class AnswerPipeline {
    * API 응답 스키마는 _searchRAG와 동일 (cases/context/resultCount).
    * 추가 필드 (confidence, refinementUsed)는 내부 로깅용.
    */
-  _searchRAGMultiStep(question, options) {
-    const primary = this._searchRAG(question, options);
+  async _searchRAGMultiStep(question, options) {
+    const primary = await this._searchRAG(question, options);
 
     // refinement 비활성 또는 1차에서 cases 없음 → 그대로 반환
     if (!this.refinementConfig.enabled || primary.cases.length === 0) {
@@ -437,7 +622,7 @@ class AnswerPipeline {
     const secondaryGroups = [];
     for (const cand of candidates) {
       console.log(`[Pipeline]   refine[${cand.strategy}]: "${cand.query}"`);
-      const sec = this._searchRAG(cand.query, options);
+      const sec = await this._searchRAG(cand.query, options);
       if (sec.cases.length > 0) {
         secondaryGroups.push(sec.cases);
       }
