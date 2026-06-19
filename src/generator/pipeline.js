@@ -20,6 +20,7 @@ const {
   appendPolicyNotice,
 } = require('./answerPolicy');
 const { buildQuestionAttachmentContext } = require('./attachmentContext');
+const { enrichAttachmentsWithOcr } = require('./ocr');
 const { buildMcpContext } = require('./mcpContext');
 const { resolvePythonPath } = require('../utils/pythonPath');
 const {
@@ -263,7 +264,10 @@ class AnswerPipeline {
         console.warn(`[Pipeline] MCP warnings: ${mcpContext.errors.join('; ')}`);
       }
     }
-    const attachmentContext = buildQuestionAttachmentContext(options.attachments || []);
+    // [2026-06-19] 첨부 이미지 OCR 활성화. 이전엔 enrich 단계가 누락돼 ocrText가 항상 비어
+    //   이미지 내용이 답변에 반영되지 않았다(05-20 배포 스냅샷에 있던 배선의 복원).
+    const enrichedAttachments = await enrichAttachmentsWithOcr(options.attachments || [], this.generator.fullConfig);
+    const attachmentContext = buildQuestionAttachmentContext(enrichedAttachments);
     if (attachmentContext.summary.total > 0) {
       console.log(`[Pipeline] attachments: ${attachmentContext.summary.total}, OCR: ${attachmentContext.summary.imageOcrCount}/${attachmentContext.summary.imagePayloadCount}`);
     }
@@ -423,7 +427,9 @@ class AnswerPipeline {
         console.warn(`[Pipeline] follow-up MCP warnings: ${mcpContext.errors.join('; ')}`);
       }
     }
-    const attachmentContext = buildQuestionAttachmentContext(options.attachments || []);
+    // [2026-06-19] 첨부 이미지 OCR 활성화 (process()와 동일, follow-up 경로 복원).
+    const enrichedAttachments = await enrichAttachmentsWithOcr(options.attachments || [], this.generator.fullConfig);
+    const attachmentContext = buildQuestionAttachmentContext(enrichedAttachments);
     if (attachmentContext.summary.total > 0) {
       console.log(`[Pipeline] follow-up attachments: ${attachmentContext.summary.total}, OCR: ${attachmentContext.summary.imageOcrCount}/${attachmentContext.summary.imagePayloadCount}`);
     }
