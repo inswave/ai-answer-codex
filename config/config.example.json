@@ -84,7 +84,8 @@
     "tessdataDir": "./data/tessdata",
     "timeoutMs": 30000,
     "maxImages": 3,
-    "maxBytes": 5242880
+    "maxBytes": 5242880,
+    "uploadBaseDir": "/var/www/html/ser-www/webapps/ROOT/websquareWork/upload"
   },
   "llmProvider": "codexExec",
   "codexExec": {

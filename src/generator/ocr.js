@@ -110,9 +110,39 @@ function runImagePreprocess(inputPath, outputPath, ocrConfig) {
   });
 }
 
+// [2026-06-19] 방안B — 인라인 base64 가 없으면, 게시판이 서버에 업로드해둔 원본 이미지 파일을
+//   직접 읽어 OCR 한다. 클라이언트는 대용량 base64 대신 serverPath(업로드 저장경로)만 보낸다.
+//   경로 조작(traversal) 방지: ocr.uploadBaseDir 하위 경로만 허용한다(미설정 시 비활성).
+function resolveImageBuffer(attachment, ocrConfig) {
+  // 1) 인라인 base64 우선 (기존 동작)
+  const inline = getImageBuffer(attachment);
+  if (inline) return { buffer: inline, source: 'inline' };
+
+  // 2) 서버 저장 경로에서 읽기 (방안B)
+  const serverPath = String(attachment.serverPath || attachment.uploaded_filename || '').trim();
+  if (!serverPath) return { buffer: null, reason: 'no_payload' };
+
+  if (!ocrConfig.uploadBaseDir) return { buffer: null, reason: 'uploadBaseDir_not_configured' };
+  const baseDir = path.resolve(ocrConfig.uploadBaseDir);
+  const resolved = path.resolve(serverPath);
+  if (resolved !== baseDir && !resolved.startsWith(baseDir + path.sep)) {
+    return { buffer: null, reason: 'path_outside_base' };
+  }
+
+  try {
+    if (!fs.existsSync(resolved) || !fs.statSync(resolved).isFile()) {
+      return { buffer: null, reason: 'file_not_found' };
+    }
+    return { buffer: fs.readFileSync(resolved), source: 'server_file' };
+  } catch (err) {
+    return { buffer: null, reason: 'read_error', error: err.message };
+  }
+}
+
 async function ocrAttachment(attachment, ocrConfig, index) {
-  const buffer = getImageBuffer(attachment);
-  if (!buffer) return { status: 'no_payload', text: '' };
+  const resolved = resolveImageBuffer(attachment, ocrConfig);
+  const buffer = resolved.buffer;
+  if (!buffer) return { status: 'no_payload', text: '', reason: resolved.reason, error: resolved.error };
 
   const maxBytes = Number(ocrConfig.maxBytes || DEFAULT_MAX_BYTES);
   if (buffer.length > maxBytes) {
@@ -188,6 +218,7 @@ async function enrichAttachmentsWithOcr(attachments = [], config = loadConfig())
       ocrText: ocr.text || '',
       ocrStatus: ocr.status,
       ocrError: ocr.error || '',
+      ocrReason: ocr.reason || '',
     });
   }
 
