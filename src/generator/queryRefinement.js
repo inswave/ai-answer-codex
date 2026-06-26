@@ -84,6 +84,38 @@ const STOPWORDS = new Set([
   '안녕하세요', '문의', '드립니다', '바랍니다', '감사합니다',
 ]);
 
+// 한글 음절 여부 (가~힣)
+function isHangulSyllable(ch) {
+  if (!ch) return false;
+  const code = ch.charCodeAt(0);
+  return code >= 0xac00 && code <= 0xd7a3;
+}
+
+/**
+ * 컴포넌트 별칭 매칭 (오탐 방지)
+ *  - 영문 별칭: 소문자 substring 매칭
+ *  - 한국어 별칭(3글자 이상): substring 매칭 (예: '탭컨트롤', '메뉴탭')
+ *  - 짧은 한국어 별칭(1~2글자): 바로 앞 글자가 한글이면(합성어 접미사) 매칭 제외.
+ *    '탭'이 "소스탭", '그룹'이 "엑셀그룹"처럼 무관한 합성어 꼬리에 걸려
+ *    엉뚱한 컴포넌트(tabControl 등)로 refine되던 오탐을 차단한다.
+ */
+function aliasMatches(text, lower, alias) {
+  if (/^[a-zA-Z_ ]+$/.test(alias)) {
+    return lower.includes(alias.toLowerCase());
+  }
+  if (alias.length >= 3) {
+    return text.includes(alias);
+  }
+  let from = 0;
+  for (;;) {
+    const idx = text.indexOf(alias, from);
+    if (idx === -1) return false;
+    const before = idx > 0 ? text[idx - 1] : '';
+    if (!isHangulSyllable(before)) return true; // 비한글/문장시작 경계 → 정상 매칭
+    from = idx + alias.length; // 한글 뒤(합성어 접미사) → 다음 후보 탐색
+  }
+}
+
 /**
  * 질문에서 컴포넌트/API/행위/버전 엔티티 추출
  * @param {string} question
@@ -95,13 +127,7 @@ function extractEntities(question) {
 
   const components = [];
   for (const [canonical, aliases] of Object.entries(COMPONENT_DICT)) {
-    const matched = aliases.some((alias) => {
-      // 영어 alias는 lowercase 비교, 한국어는 원본 비교
-      if (/^[a-zA-Z_ ]+$/.test(alias)) {
-        return lower.includes(alias.toLowerCase());
-      }
-      return text.includes(alias);
-    });
+    const matched = aliases.some((alias) => aliasMatches(text, lower, alias));
     if (matched && !components.includes(canonical)) {
       components.push(canonical);
     }
