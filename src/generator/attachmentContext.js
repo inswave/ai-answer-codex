@@ -2,8 +2,13 @@ const path = require('path');
 const { sanitize } = require('../utils/sanitize');
 const { maskSensitiveInfo } = require('../utils/masking');
 
-const MAX_ATTACHMENT_CHARS = 8000;
-const MAX_TOTAL_CHARS = 16000;
+// [2026-06-22] 첨부 분석 상한 상향 + 이미지 OCR 예산 분리.
+//   기존엔 텍스트·이미지가 MAX_TOTAL_CHARS 한 예산을 공유해, 큰 텍스트(css 등) 몇 개가
+//   예산을 다 쓰면 뒤 텍스트가 통째 누락(미지원)되고 이미지 OCR 은 0자로 굶었음.
+const MAX_ATTACHMENT_CHARS = 15000;      // 텍스트 파일당 상한 (기존 8000)
+const MAX_TOTAL_CHARS = 45000;           // 텍스트 전체 합 상한 (기존 16000)
+const MAX_OCR_CHARS = 8000;              // 이미지 OCR 파일당 상한
+const MAX_TOTAL_OCR_CHARS = 16000;       // 이미지 OCR 전체 합 상한 (텍스트와 별도 예산)
 
 const TEXT_EXTENSIONS = new Set(['.xml', '.js', '.css', '.html', '.htm', '.txt', '.md']);
 const IMAGE_META_EXTENSIONS = new Set(['.png', '.jpg', '.jpeg', '.gif', '.bmp', '.webp', '.svg']);
@@ -97,7 +102,8 @@ function buildQuestionAttachmentContext(attachments = []) {
   const imageOcr = [];
   const blocked = [];
   const unsupported = [];
-  let totalChars = 0;
+  let totalChars = 0;       // 텍스트 누적
+  let totalOcrChars = 0;    // 이미지 OCR 누적 (텍스트와 별도 예산)
 
   for (const item of normalized) {
     const risky = RISKY_NAME_PATTERN.test(item.filename);
@@ -146,9 +152,9 @@ function buildQuestionAttachmentContext(attachments = []) {
       const ocrText = cleanAttachmentText(item.raw?.ocrText || '', '.txt');
 
       if (ocrText) {
-        const remaining = Math.max(0, MAX_TOTAL_CHARS - totalChars);
-        const safeText = ocrText.slice(0, Math.min(MAX_ATTACHMENT_CHARS, remaining));
-        totalChars += safeText.length;
+        const remaining = Math.max(0, MAX_TOTAL_OCR_CHARS - totalOcrChars);
+        const safeText = ocrText.slice(0, Math.min(MAX_OCR_CHARS, remaining));
+        totalOcrChars += safeText.length;
         imageOcr.push({
           type: 'image_ocr',
           filename: item.filename,

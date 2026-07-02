@@ -942,14 +942,27 @@ async function main() {
   }
   console.log(`[URL 매핑] 자동 채움: ${urlAutoFilled}건`);
 
-  // 중복 제거 (question 기준)
+  // 중복 제거 (source + question 전체 기준)
+  // — 같은 출처의 재수집분은 dedup으로 갱신(위 정렬 순서상 새 데이터 우선),
+  //   다른 출처의 동일 제목 문의는 답변이 다를 수 있으므로 각각 유지
   const seen = new Set();
   const deduplicated = allData.filter(item => {
-    const key = item.question.trim().substring(0, 100);
+    const key = `${item.source}|${item.question.trim().replace(/\s+/g, ' ')}`;
     if (seen.has(key)) return false;
     seen.add(key);
     return true;
   });
+
+  // 안전 가드: raw 데이터 누락 등으로 결과가 기존 파일 대비 절반 미만이면 덮어쓰기 중단 (--force로 무시)
+  if (!process.argv.includes('--force')) {
+    try {
+      const prev = JSON.parse(await fs.readFile(OUTPUT_PATH, 'utf8'));
+      if (Array.isArray(prev) && deduplicated.length < prev.length / 2) {
+        console.error(`[중단] 결과 ${deduplicated.length}건이 기존 ${prev.length}건의 절반 미만입니다. raw 데이터 누락 가능성 — 의도된 축소라면 --force로 재실행하세요.`);
+        process.exit(1);
+      }
+    } catch { /* 기존 파일 없거나 파싱 불가 시 통과 */ }
+  }
 
   await fs.writeFile(OUTPUT_PATH, JSON.stringify(deduplicated, null, 2), 'utf8');
 

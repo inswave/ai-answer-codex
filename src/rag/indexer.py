@@ -70,7 +70,18 @@ class RAGIndexer:
 
         # 기존 ID 조회하여 신규분만 필터링
         if not reset:
-            existing_ids = set(self.collection.get()["ids"]) if self.collection.count() > 0 else set()
+            # 대용량 컬렉션에서 collection.get() 을 한 번에 하면
+            # SQLite "too many SQL variables" 오류가 나므로 페이지 단위로 조회.
+            existing_ids = set()
+            if self.collection.count() > 0:
+                page = 5000
+                offset = 0
+                while True:
+                    batch = self.collection.get(limit=page, offset=offset).get("ids", [])
+                    if not batch:
+                        break
+                    existing_ids.update(batch)
+                    offset += page
             new_data = []
             for item in data:
                 if self._make_doc_id(item) not in existing_ids:

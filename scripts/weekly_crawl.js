@@ -155,7 +155,11 @@ async function main() {
       const bash = { cwd: ROOT, stdio: 'inherit', shell: '/bin/bash' };
 
       // 1) 기존 상주 서버 종료 (없으면 무시)
-      execSync('pkill -f "src/rag/search_server.py" || true', bash);
+      // [2026-06-22] bracket 트릭([s]rc) — 그냥 "src/rag/search_server.py" 로 쓰면 pkill -f 가
+      //   이 명령을 실행하는 자기 셸의 명령줄(인자에 같은 문자열 포함)까지 매칭해 스스로를 죽인다.
+      //   그러면 execSync 가 'Command failed'를 던져 || true 도 못 타고, 아래 재기동(2)이 통째로 skip됨.
+      //   정규식 [s]rc 는 실제 python(src/...)엔 매칭되지만 자기 셸의 [s]rc/... 리터럴엔 안 걸린다.
+      execSync('pkill -f "[s]rc/rag/search_server.py" || true', bash);
 
       // 2) 재기동 — start.sh 와 동일 방식(nohup + 로그 분리, 백그라운드)
       execSync(

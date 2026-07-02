@@ -9,7 +9,7 @@ AI 기술문의 자동 답변 시스템 — 인스웨이브 WebSquare 기술지�
 ## Tech Stack
 
 - **데이터 수집/분류/답변 생성**: Node.js (>=18), Puppeteer, IMAP
-- **RAG 벡터 검색**: Python 3.12, ChromaDB, sentence-transformers (MiniLM)
+- **RAG 벡터 검색**: Python 3.12, ChromaDB, sentence-transformers (multilingual-e5-base)
 - **LLM**: Claude Sonnet 4 (Anthropic API) — answer.js 사용 시 API 키 필요. Claude Code로 RAG 검색 후 직접 답변 생성도 가능 (추가 과금 없음).
 
 ## Commands
@@ -72,7 +72,7 @@ npm run pipeline
 - `digestGenerator.js` — 다이제스트 생성기
 
 ### 4. RAG 벡터 검색 (`src/rag/`, Python)
-- `indexer.py` — ChromaDB + MiniLM 다국어 임베딩 (384차원), 100건 배치 + 개별 재시도
+- `indexer.py` — ChromaDB + multilingual-e5-base 임베딩 (768차원), 100건 배치 + 개별 재시도
 - `searcher.py` — 코사인 유사도 검색, 상위 8건 컨텍스트 구성
 
 ### 5. 답변 생성 (`src/generator/`)

@@ -18,3 +18,9 @@ Thumbs.db
 
 # 워치독 설정(웹훅 시크릿) — 커밋 금지
 scripts/watchdog.conf
+
+# 보고서 생성용 라이브러리 캐시 (mermaid/marked) — 커밋 제외
+.libcache/
+
+# Claude Code 개인 로컬 설정 — 커밋 제외
+.claude/settings.local.json
