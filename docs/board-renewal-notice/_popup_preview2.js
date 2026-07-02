@@ -1,0 +1,26 @@
+const puppeteer = require('puppeteer');
+const fs = require('fs');
+const dir = 'C:/Users/user/Desktop/ai-answer-remote/docs/board-renewal-notice';
+const feat = (icon,t,d)=>'<div style="display:flex;align-items:flex-start;gap:10px;margin-bottom:10px;"><span style="flex:0 0 auto;width:24px;height:24px;border-radius:50%;background:#eaf2fc;color:#1a4fa0;font-size:13px;text-align:center;line-height:24px;font-weight:800;">'+icon+'</span><span style="padding-top:2px;"><b>'+t+'</b> &mdash; '+d+'</span></div>';
+const step=(n,t)=>'<div style="display:flex;align-items:flex-start;gap:10px;margin-bottom:8px;"><span style="flex:0 0 auto;width:24px;height:24px;border-radius:50%;background:#1a4fa0;color:#fff;font-size:13px;text-align:center;line-height:24px;font-weight:800;">'+n+'</span><span style="padding-top:2px;">'+t+'</span></div>';
+const html=''
++'<div style="background:linear-gradient(135deg,#1a4fa0,#3a7bd5);padding:24px 28px;color:#fff;">'
++'<div style="font-size:12px;font-weight:700;letter-spacing:.05em;opacity:.9;">INSWAVE 기술지원 공지</div>'
++'<div style="font-size:21px;font-weight:800;line-height:1.3;margin-top:7px;">AI 자동 답변 서비스 오픈 &#127881;</div>'
++'<div style="font-size:13px;opacity:.92;margin-top:7px;">기술지원 게시판이 AI 자동 답변과 함께 새롭게 리뉴얼되었습니다.</div></div>'
++'<div style="padding:22px 28px;font-size:13px;line-height:1.6;color:#2a2f37;">'
++'<div style="background:#fff6f3;border:1px solid #f3c5b6;border-radius:8px;padding:12px 15px;margin-bottom:18px;"><b style="color:#c0392b;">&#9888; 필독</b> &nbsp;본 서비스는 <b style="color:#c0392b;">유지보수 계약 업체</b>에 한하여 제공됩니다. AI 답변이 어려운 경우 <b>엔지니어 답변을 요청</b>하시면 기존과 동일하게 담당 엔지니어가 답변드립니다.</div>'
++'<div style="font-size:15px;font-weight:800;color:#1a4fa0;margin-bottom:12px;">새로워진 기능</div>'
++feat('AI','AI 자동 답변 초안','원인 분석 &rarr; 해결 방법 &rarr; 확인 사항 순으로 즉시 제공')
++feat('&#128279;','답변 근거 함께 제공','활용된 유사 사례&middot;출처를 함께 표시')
++feat('&#128196;','첨부 소스 분석','.xml 등 소스를 첨부하면 화면 구조에 맞춰 답변')
++feat('&#11015;','샘플 다운로드','관련 개발가이드 공식 예제를 바로 내려받기')
++'<div style="font-size:15px;font-weight:800;color:#1a4fa0;margin:20px 0 12px;">이용 방법</div>'
++step('1','<b>[문의하기]</b> 선택 &rarr; 제품 / 회사(프로젝트)명 / WebSquare 버전 입력')
++step('2','문의 내용 작성 + 관련 <b>소스(.xml 등) 첨부</b>')
++step('3','등록 후 수 분 내 <b>AI 답변 초안</b> 확인 (추가 문의는 이어서 작성)')
++'</div>';
+const btns='<div style="padding:14px 22px;text-align:right;border-top:1px solid #ececec;background:#fafbfc;"><button style="padding:8px 14px;margin-left:6px;border:1px solid #ccc;background:#fff;border-radius:4px;">오늘 하루 보지 않기</button><button style="padding:8px 16px;margin-left:6px;background:#1a4fa0;color:#fff;border:none;border-radius:4px;">닫기</button></div>';
+const page='<!DOCTYPE html><html lang="ko"><head><meta charset="UTF-8"><style>body{font-family:"Malgun Gothic",sans-serif;background:#cfd3d8;margin:0;padding:30px;}.popup{width:720px;background:#fff;border-radius:8px;overflow:hidden;box-shadow:0 12px 40px rgba(0,0,0,.35);}.tb{background:#2b2f36;color:#fff;font-size:12px;padding:7px 14px;}</style></head><body><div class="popup"><div class="tb">기술지원 게시판 리뉴얼 안내</div>'+html+btns+'</div></body></html>';
+fs.writeFileSync(dir+'/_popup_preview2.html',page);
+(async()=>{const b=await puppeteer.launch({headless:'new',args:['--no-sandbox']});const p=await b.newPage();await p.setViewport({width:800,height:860,deviceScaleFactor:2});await p.goto('file:///'+dir+'/_popup_preview2.html',{waitUntil:'networkidle0'});await p.screenshot({path:dir+'/popup_preview.png',fullPage:true});await b.close();console.log('done');})();

@@ -1,0 +1,844 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AI 기술문의 자동 답변 시스템 구조 정리</title>
+<style>
+  :root {
+    --ink: #111827;
+    --sub: #4b5563;
+    --line: #cbd5e1;
+    --soft: #f8fafc;
+    --blue: #2f5f8f;
+    --teal: #2f6f73;
+    --green: #4f7358;
+    --amber: #9a6a2f;
+    --red: #8a4b4b;
+    --dark: #1f2937;
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    margin: 0;
+    background: #e5e7eb;
+    color: var(--ink);
+    font-family: "Malgun Gothic", "Segoe UI", Arial, sans-serif;
+    font-size: 13.5px;
+    line-height: 1.45;
+  }
+
+  .page {
+    width: 210mm;
+    min-height: 297mm;
+    margin: 16px auto;
+    background: #fff;
+    padding: 14mm 13mm;
+    box-shadow: 0 5px 18px rgba(15, 23, 42, .16);
+  }
+
+  .sheet { page-break-after: always; min-height: 265mm; }
+  .sheet:last-child { page-break-after: auto; }
+
+  h1, h2, h3 { margin: 0; line-height: 1.25; letter-spacing: 0; }
+  h1 { font-size: 31px; }
+  h2 {
+    font-size: 21px;
+    padding-bottom: 7px;
+    border-bottom: 2px solid var(--dark);
+    margin-bottom: 12px;
+  }
+  h3 { font-size: 15px; margin-bottom: 7px; color: #0f172a; }
+  p { margin: 6px 0; }
+  ul, ol { margin: 6px 0 6px 18px; padding: 0; }
+  li { margin: 3px 0; }
+
+  code {
+    font-family: Consolas, "Courier New", monospace;
+    background: #eef2f7;
+    border: 1px solid #dde5ee;
+    border-radius: 3px;
+    padding: 1px 4px;
+    font-size: 12px;
+  }
+
+  .topline {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    color: var(--sub);
+    font-size: 12px;
+    border-bottom: 1px solid var(--line);
+    padding-bottom: 8px;
+    margin-bottom: 18px;
+  }
+
+  .cover {
+    display: grid;
+    grid-template-rows: auto 1fr auto;
+    min-height: 265mm;
+  }
+
+  .cover-title {
+    margin-top: 16mm;
+  }
+
+  .label {
+    display: inline-block;
+    color: #fff;
+    background: var(--dark);
+    padding: 5px 9px;
+    font-size: 12px;
+    font-weight: 700;
+    margin-bottom: 14px;
+  }
+
+  .lead {
+    font-size: 16px;
+    color: #263241;
+    width: 155mm;
+    margin-top: 12px;
+  }
+
+  .cover-meta {
+    display: grid;
+    grid-template-columns: 32mm 1fr;
+    gap: 6px 12px;
+    border-top: 2px solid var(--dark);
+    padding-top: 12px;
+    color: var(--sub);
+  }
+  .cover-meta strong { color: var(--ink); }
+
+  .kpi-row {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 8px;
+    margin-top: 18px;
+  }
+
+  .kpi {
+    border: 1px solid var(--line);
+    padding: 9px;
+    background: #fbfdff;
+  }
+  .kpi b { display: block; font-size: 22px; color: var(--blue); line-height: 1.1; }
+  .kpi span { display: block; color: var(--sub); font-size: 11.5px; margin-top: 3px; }
+
+  .box {
+    border: 1px solid var(--line);
+    background: #fff;
+    padding: 9px;
+  }
+  .box.dark { background: #111827; color: #fff; border-color: #111827; }
+  .box.blue { border-top: 3px solid var(--blue); background: #f7faff; }
+  .box.teal { border-top: 3px solid var(--teal); background: #f6fbfb; }
+  .box.green { border-top: 3px solid var(--green); background: #f7fbf7; }
+  .box.amber { border-top: 3px solid var(--amber); background: #fffaf2; }
+  .box.red { border-top: 3px solid var(--red); background: #fff8f8; }
+  .box .title { font-weight: 800; margin-bottom: 5px; }
+  .box .small { color: var(--sub); font-size: 12px; }
+  .box.dark .small { color: #d1d5db; }
+
+  .arch-grid {
+    display: grid;
+    grid-template-columns: 31mm 8mm 42mm 8mm 48mm 8mm 38mm;
+    gap: 5px;
+    align-items: stretch;
+    margin: 12px 0 14px;
+  }
+
+  .arrow {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: #64748b;
+    font-weight: 900;
+    font-size: 20px;
+  }
+
+  .stack {
+    display: grid;
+    gap: 6px;
+  }
+
+  .lane {
+    border: 1px solid var(--line);
+    display: grid;
+    grid-template-columns: 30mm 1fr;
+    margin-bottom: 7px;
+  }
+  .lane-head {
+    background: #f1f5f9;
+    border-right: 1px solid var(--line);
+    padding: 8px;
+    font-weight: 800;
+  }
+  .lane-body {
+    padding: 8px;
+  }
+
+  .flow {
+    display: grid;
+    grid-template-columns: repeat(6, 1fr);
+    gap: 6px;
+    margin: 10px 0 14px;
+  }
+  .flow .node {
+    border: 1px solid var(--line);
+    padding: 8px;
+    min-height: 58px;
+    background: #fff;
+  }
+  .node b { display: block; color: var(--blue); margin-bottom: 3px; }
+
+  .seq {
+    display: grid;
+    grid-template-columns: 28mm repeat(5, 1fr);
+    border: 1px solid var(--line);
+    margin-top: 10px;
+    font-size: 12.2px;
+  }
+  .seq div {
+    border-right: 1px solid var(--line);
+    border-bottom: 1px solid var(--line);
+    padding: 7px;
+    min-height: 34px;
+  }
+  .seq div:nth-child(6n) { border-right: 0; }
+  .seq .head {
+    background: #edf4fb;
+    font-weight: 800;
+    text-align: center;
+  }
+  .seq .stepno {
+    background: #f8fafc;
+    font-weight: 800;
+    color: var(--sub);
+  }
+  .seq .hit { background: #f4faf9; }
+  .seq .warn { background: #fff8ec; }
+
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 10px 0 13px;
+    font-size: 12.7px;
+  }
+  th, td {
+    border: 1px solid var(--line);
+    padding: 7px 8px;
+    text-align: left;
+    vertical-align: top;
+  }
+  th { background: #eef2f7; }
+
+  .two {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 8px;
+  }
+
+  .three {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 8px;
+  }
+
+  .note {
+    border-left: 4px solid var(--blue);
+    background: #f7faff;
+    padding: 8px 10px;
+    margin: 9px 0;
+  }
+
+  .diagram-title {
+    color: var(--sub);
+    font-weight: 700;
+    margin: 10px 0 5px;
+  }
+
+  .deploy {
+    display: grid;
+    grid-template-columns: 42mm 1fr 46mm;
+    gap: 8px;
+    margin: 12px 0;
+    align-items: start;
+  }
+
+  .config-map {
+    display: grid;
+    grid-template-columns: 38mm 1fr 1fr 1fr;
+    border: 1px solid var(--line);
+    margin: 10px 0 14px;
+    font-size: 12.5px;
+  }
+  .config-map > div {
+    border-right: 1px solid var(--line);
+    border-bottom: 1px solid var(--line);
+    padding: 8px;
+    min-height: 34px;
+  }
+  .config-map > div:nth-child(4n) { border-right: 0; }
+  .config-map .h {
+    background: #edf4fb;
+    font-weight: 800;
+    text-align: center;
+  }
+  .config-map .area {
+    background: #f8fafc;
+    font-weight: 800;
+  }
+  .config-map .point {
+    background: #fffaf2;
+  }
+  .server {
+    border: 2px solid #334155;
+    padding: 9px;
+    background: #fbfdff;
+  }
+
+  .footer {
+    margin-top: 12px;
+    padding-top: 8px;
+    border-top: 1px solid var(--line);
+    color: var(--sub);
+    font-size: 11.5px;
+  }
+
+  @media print {
+    body { background: #fff; }
+    .page { width: auto; min-height: 0; margin: 0; padding: 0; box-shadow: none; }
+    .sheet { page-break-after: always; min-height: 0; }
+    .box, table, .lane, .seq, .server { page-break-inside: avoid; }
+  }
+</style>
+</head>
+<body>
+<main class="page">
+  <section class="sheet cover">
+    <div class="topline">
+      <span>AI 기술문의 자동 답변 시스템</span>
+      <span>시스템 구조 정리 / 2026-06-26</span>
+    </div>
+
+    <div class="cover-title">
+      <span class="label">시스템 구조 정리</span>
+      <h1>AI 기술문의 자동 답변 시스템</h1>
+      <p class="lead">
+        WebSquare 기술지원 문의가 들어왔을 때 기존 문의, 가이드, API 문서를 먼저 찾고,
+        첨부 내용까지 확인한 뒤 담당자가 검토할 답변 초안을 만드는 구조입니다.
+      </p>
+
+      <div class="kpi-row">
+        <div class="kpi"><b>REST</b><span>게시판/운영 UI 연동</span></div>
+        <div class="kpi"><b>RAG</b><span>Vector + BM25 하이브리드 검색</span></div>
+        <div class="kpi"><b>OCR</b><span>첨부 이미지 로그 분석</span></div>
+        <div class="kpi"><b>검증</b><span>정책 판단 + API 존재 확인</span></div>
+      </div>
+    </div>
+
+    <div class="cover-meta">
+      <strong>작성 기준</strong><span>현재 개발된 코드 기준</span>
+      <strong>주요 파일</strong><span><code>src/api</code>, <code>src/generator</code>, <code>src/rag</code>, <code>src/collectors</code></span>
+      <strong>주요 런타임</strong><span>Node.js Express, Python RAG Server, ChromaDB, Codex Exec, Tesseract OCR</span>
+      <strong>산출물</strong><span>시스템 아키텍처 PDF</span>
+    </div>
+  </section>
+
+  <section class="sheet">
+    <div class="topline"><span>01</span><span>전체 구조</span></div>
+    <h2>1. 전체 시스템 구조</h2>
+
+    <div class="diagram-title">그림 1. 전체 흐름</div>
+    <div class="arch-grid">
+      <div class="stack">
+        <div class="box dark">
+          <div class="title">사용자/화면</div>
+          <div class="small">기술지원 게시판<br>운영/검토 화면<br>CLI 스크립트</div>
+        </div>
+      </div>
+      <div class="arrow">→</div>
+      <div class="stack">
+        <div class="box blue">
+          <div class="title">API 서버</div>
+          <div class="small">인증, 요청 정리, 기능별 라우팅</div>
+        </div>
+        <div class="box">
+          <code>/api/search</code><br>
+          <code>/api/answer</code><br>
+          <code>/api/queue</code>
+        </div>
+      </div>
+      <div class="arrow">→</div>
+      <div class="stack">
+        <div class="box teal">
+          <div class="title">답변 생성 흐름</div>
+          <div class="small">분류, 검색, 첨부 확인, 답변 생성, 검증</div>
+        </div>
+        <div class="box">
+          <code>pipeline.js</code><br>
+          <code>answerGenerator.js</code><br>
+          <code>answerPolicy.js</code>
+        </div>
+      </div>
+      <div class="arrow">↔</div>
+      <div class="stack">
+        <div class="box green">
+        <div class="title">검색/보조 기능</div>
+          <div class="small">RAG 검색 서버<br>MCP 스펙<br>OCR<br>API 검증</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="arch-grid">
+      <div class="box amber">
+        <div class="title">원천 데이터</div>
+        Gmail<br>W-Tech QNA/FAQ<br>Confluence<br>API Guide
+      </div>
+      <div class="arrow">→</div>
+      <div class="box amber">
+        <div class="title">수집/통합</div>
+        <code>src/collectors</code><br>
+        <code>scripts/merge.js</code><br>
+        <code>data/raw</code>
+      </div>
+      <div class="arrow">→</div>
+      <div class="box amber">
+        <div class="title">분류/색인</div>
+        <code>src/classifier</code><br>
+        <code>indexer.py</code><br>
+        <code>data/processed</code>
+      </div>
+      <div class="arrow">→</div>
+      <div class="box amber">
+        <div class="title">검색 저장소</div>
+        ChromaDB<br>
+        Q&A 검색 컬렉션<br>
+        <code>data/chroma</code>
+      </div>
+    </div>
+
+    <div class="note">
+      <b>구조 요약</b>
+      <p>
+        API 서버는 요청을 받고 결과를 돌려주는 역할만 맡습니다. 답변을 만드는 과정은 <code>AnswerPipeline</code>에 모았습니다.
+        검색은 Python RAG 서버로 분리했고, 수집/분류/인덱싱은 답변 요청과 따로 돌리는 배치 작업으로 구성했습니다.
+      </p>
+    </div>
+
+    <div class="two">
+      <div class="box">
+        <div class="title">문의 처리 경로</div>
+        고객 문의 → Express API → Answer Pipeline → RAG/MCP/OCR/LLM → API 검증 → 답변/출처/검토상태 반환
+      </div>
+      <div class="box">
+        <div class="title">데이터 갱신 경로</div>
+        수집원 → raw 저장 → 통합/분류 → 임베딩 생성 → ChromaDB 저장 → 검색 서버에서 사용
+      </div>
+    </div>
+  </section>
+
+  <section class="sheet">
+    <div class="topline"><span>02</span><span>답변 생성 흐름</span></div>
+    <h2>2. 시스템 구성도</h2>
+
+    <div class="diagram-title">그림 2. 실행 구성 기준</div>
+    <div class="config-map">
+      <div class="h">구분</div>
+      <div class="h">구성 요소</div>
+      <div class="h">주요 역할</div>
+      <div class="h">저장/연동 위치</div>
+
+      <div class="area">사용자 영역</div>
+      <div>기술지원 게시판<br>운영/검토 화면<br>CLI 테스트</div>
+      <div>문의 입력, 답변 확인, 담당자 검토</div>
+      <div class="point">답변 요청<br>검색 요청<br>테스트 실행</div>
+
+      <div class="area">API 영역</div>
+      <div>Express API 서버<br>라우터<br>API Key 인증</div>
+      <div>요청 접수, 인증, 검색/답변/큐/첨부 기능 연결</div>
+      <div class="point">API 서버<br>검색/답변/큐/첨부 인터페이스</div>
+
+      <div class="area">업무 처리 영역</div>
+      <div>답변 파이프라인<br>답변 생성기<br>정책 판단<br>API 검증</div>
+      <div>질문 분류, 근거 검색, 답변 생성, 검증, 저장</div>
+      <div class="point">답변 생성 엔진<br>정책 판단<br>검증 처리</div>
+
+      <div class="area">검색 영역</div>
+      <div>Python RAG 서버<br>ChromaDB<br>BM25 인덱스</div>
+      <div>유사 문의 검색, 키워드 검색, 검색 결과 점수화</div>
+      <div class="point">검색 서버<br>벡터 저장소<br>키워드 인덱스</div>
+
+      <div class="area">데이터 영역</div>
+      <div>수집 데이터<br>통합 Q&A<br>분류 데이터<br>답변 저장 파일</div>
+      <div>검색 근거 관리, 생성 답변 이력 보관</div>
+      <div class="point">원본 데이터<br>정제 데이터<br>답변 이력</div>
+
+      <div class="area">외부 연동</div>
+      <div>Gmail<br>W-Tech<br>Confluence<br>API Guide<br>Codex Exec</div>
+      <div>지식 수집, 공식 문서 확인, LLM 답변 생성</div>
+      <div class="point">운영 설정 기준 연동</div>
+    </div>
+
+    <h3>주요 구성 요소</h3>
+    <table>
+      <thead>
+        <tr>
+          <th>구성 요소</th>
+          <th>담당 기능</th>
+          <th>입력</th>
+          <th>출력</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>API 서버</td>
+          <td>REST API, 인증, 요청 라우팅</td>
+          <td>질문, 첨부, 버전 정보</td>
+          <td>답변, 출처, 검토 상태</td>
+        </tr>
+        <tr>
+          <td>답변 생성 엔진</td>
+          <td>답변 생성 전체 흐름 제어</td>
+          <td>정리된 질문, RAG 결과, 첨부 컨텍스트</td>
+          <td>답변 초안, 검증 결과, 저장 파일</td>
+        </tr>
+        <tr>
+          <td>RAG 검색 서버</td>
+          <td>벡터/BM25 검색, 인덱싱</td>
+          <td>분류 완료 Q&A, 검색어</td>
+          <td>유사 문의, 검색 점수, 컨텍스트</td>
+        </tr>
+        <tr>
+          <td>데이터 수집 배치</td>
+          <td>외부 지식 데이터 수집</td>
+          <td>Gmail, W-Tech, Confluence, API Guide</td>
+          <td>원천 JSON, 통합 Q&A</td>
+        </tr>
+        <tr>
+          <td>분류기</td>
+          <td>문의 유형 분류</td>
+          <td>통합 Q&A 또는 신규 질문</td>
+          <td>카테고리, 서브카테고리</td>
+        </tr>
+        <tr>
+          <td>공통 처리</td>
+          <td>설정 로딩, 민감정보 마스킹, 파일 변환</td>
+          <td>설정값, 문자열, 첨부 정보</td>
+          <td>정리된 설정값, 마스킹 결과, 변환 결과</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <h3>데이터 보관 구조</h3>
+    <table>
+      <thead>
+        <tr><th>데이터 구분</th><th>내용</th><th>사용 시점</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>원본 데이터</td><td>Gmail, W-Tech, Confluence, API Guide에서 수집한 원본</td><td>수집 직후</td></tr>
+        <tr><td>통합 Q&A</td><td>수집 데이터를 하나의 문의/답변 형식으로 맞춘 데이터</td><td>분류 전</td></tr>
+        <tr><td>분류 데이터</td><td>문의 유형과 카테고리가 붙은 검색 대상 데이터</td><td>검색 인덱스 생성 전</td></tr>
+        <tr><td>검색 인덱스</td><td>벡터 검색과 키워드 검색에 사용하는 인덱스</td><td>문의 검색 시</td></tr>
+        <tr><td>답변 이력</td><td>생성된 답변 초안과 처리 결과</td><td>답변 생성 후</td></tr>
+        <tr><td>운영 설정</td><td>연동 계정, API Key, OCR, LLM, MCP 설정</td><td>서버/배치 실행 시</td></tr>
+      </tbody>
+    </table>
+  </section>
+
+  <section class="sheet">
+    <div class="topline"><span>03</span><span>답변 생성 흐름</span></div>
+    <h2>3. 답변 생성 처리 순서</h2>
+
+    <div class="diagram-title">그림 3. 문의 1건이 처리되는 순서</div>
+    <div class="seq">
+      <div class="head">단계</div>
+      <div class="head">화면/요청자</div>
+      <div class="head">API 서버</div>
+      <div class="head">답변 생성</div>
+      <div class="head">검색/보조 기능</div>
+      <div class="head">LLM/결과</div>
+
+      <div class="stepno">1. 요청</div>
+      <div>질문, 버전, 첨부 전달</div>
+      <div class="hit">API Key 확인<br>요청값 정리</div>
+      <div></div>
+      <div></div>
+      <div></div>
+
+      <div class="stepno">2. 범위 확인</div>
+      <div></div>
+      <div>라우터에서 pipeline 호출</div>
+      <div class="hit">민감정보 마스킹<br>분류<br>답변 범위 확인</div>
+      <div></div>
+      <div class="warn">blocked면 안내문 즉시 반환</div>
+
+      <div class="stepno">3. 자료 검색</div>
+      <div></div>
+      <div></div>
+      <div>질문 핵심어 추출<br>검색 결과 확인</div>
+      <div class="hit">RAG 서버 검색<br>실패 시 subprocess 대체<br>필요 시 보정 검색</div>
+      <div></div>
+
+      <div class="stepno">4. 내용 보강</div>
+      <div></div>
+      <div></div>
+      <div class="hit">RAG + MCP + 첨부 + 미확인 용어 병합</div>
+      <div>MCP 스펙 조회<br>Tesseract OCR<br>API Guide 용어 확인</div>
+      <div></div>
+
+      <div class="stepno">5. 답변 생성</div>
+      <div></div>
+      <div></div>
+      <div>프롬프트 구성<br>답변 범위 포함</div>
+      <div></div>
+      <div class="hit">Codex Exec 호출<br>한국어 답변 보정</div>
+
+      <div class="stepno">6. 확인/저장</div>
+      <div>답변 확인</div>
+      <div>JSON 응답 반환</div>
+      <div class="hit">API명 검증<br>필요 시 재생성<br>답변 파일 저장<br>검토 큐 등록</div>
+      <div>API Guide/RAG DB 확인</div>
+      <div>answer, sources, risk 반환</div>
+    </div>
+
+    <h3>답변 처리 기준</h3>
+    <table>
+      <thead>
+        <tr><th>모드</th><th>조건</th><th>처리</th><th>운영 의미</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><code>auto</code></td>
+          <td>일반 기술 문의이고 참고 근거가 있는 경우</td>
+          <td>답변 초안 생성 후 API명 확인</td>
+          <td>담당자 검토 후 활용</td>
+        </tr>
+        <tr>
+          <td><code>human_review</code></td>
+          <td>보안, 권한, 장애 영향 등 확인이 필요한 문의</td>
+          <td>답변은 만들지만 검토 필요로 표시</td>
+          <td>담당자 확인 후 처리</td>
+        </tr>
+        <tr>
+          <td><code>blocked</code></td>
+          <td>라이선스, 데모, 계약, 파일 제공 등 기술 답변 범위 외 요청</td>
+          <td>검색/LLM을 거치지 않고 안내문 반환</td>
+          <td>자동 답변 대상에서 제외</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <h3>확인하는 지점</h3>
+    <div class="three">
+      <div class="box blue">
+        <div class="title">입력 확인</div>
+        요청값 정리, API Key, 민감정보 마스킹
+      </div>
+      <div class="box teal">
+        <div class="title">근거 확인</div>
+        RAG 결과, 보정 검색, MCP 스펙 보강
+      </div>
+      <div class="box green">
+        <div class="title">출력 확인</div>
+        API명 확인, 재생성, 검토 큐 등록
+      </div>
+    </div>
+  </section>
+
+  <section class="sheet">
+    <div class="topline"><span>04</span><span>검색/데이터 구조</span></div>
+    <h2>4. RAG 및 데이터 구조</h2>
+
+    <div class="flow">
+      <div class="node"><b>1. 수집</b>Gmail<br>W-Tech<br>Confluence<br>API Guide</div>
+      <div class="node"><b>2. 원본 저장</b><code>data/raw/*.json</code><br>수집원별 저장</div>
+      <div class="node"><b>3. 통합</b><code>all_qa.json</code><br>중복/형식 정리</div>
+      <div class="node"><b>4. 분류</b>카테고리<br>서브카테고리</div>
+      <div class="node"><b>5. 색인</b>e5 embedding<br>ChromaDB 저장</div>
+      <div class="node"><b>6. 검색</b>RAG server<br>Vector + BM25</div>
+    </div>
+
+    <div class="lane">
+      <div class="lane-head">수집 계층</div>
+      <div class="lane-body">
+        <code>src/collectors/index.js</code>에서 수집기를 실행합니다. 대상은 Gmail, W-Tech, Confluence, API Guide, W-Tech FAQ입니다.
+        Puppeteer를 사용할 수 없는 서버에서는 W-Tech 계열 수집을 건너뛸 수 있습니다.
+      </div>
+    </div>
+    <div class="lane">
+      <div class="lane-head">정제/분류 계층</div>
+      <div class="lane-body">
+        수집 결과를 통합 Q&A로 합치고 문의 유형별 카테고리를 붙입니다.
+        이 결과가 검색 인덱스의 문서 본문과 메타데이터로 들어갑니다.
+      </div>
+    </div>
+    <div class="lane">
+      <div class="lane-head">검색 계층</div>
+      <div class="lane-body">
+        <code>searcher.py</code>는 벡터 검색과 BM25 검색을 같이 수행합니다.
+        최종 점수는 벡터 0.6, BM25 0.4 가중치로 합산하고, 상위 결과만 답변 컨텍스트로 넘깁니다.
+      </div>
+    </div>
+
+    <table>
+      <thead>
+        <tr><th>항목</th><th>설계</th><th>비고</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>임베딩 모델</td>
+          <td><code>intfloat/multilingual-e5-base</code></td>
+          <td>문서 <code>passage:</code>, 질의 <code>query:</code> prefix 사용</td>
+        </tr>
+        <tr>
+          <td>벡터 저장소</td>
+          <td>ChromaDB PersistentClient / Q&A 검색 컬렉션</td>
+          <td><code>data/chroma</code>에 저장</td>
+        </tr>
+        <tr>
+          <td>인덱싱</td>
+          <td>내용 기반 doc_id, batch 256, 증분 upsert</td>
+          <td><code>--reset</code>으로 전체 재색인 가능</td>
+        </tr>
+        <tr>
+          <td>검색 서버</td>
+          <td><code>127.0.0.1:8765</code> HTTP 서버</td>
+          <td>모델과 BM25 인덱스 상주, 장애 시 subprocess 대체</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <div class="note">
+      <b>성능 구조</b>
+      <p>
+        질문마다 임베딩 모델을 새로 로딩하면 응답이 늦어집니다. 그래서 RAG 서버를 별도 프로세스로 띄워 모델과 BM25 인덱스를 메모리에 올려 둡니다.
+        첫 기동은 시간이 걸리지만, 운영 중 검색 응답 시간은 줄어듭니다.
+      </p>
+    </div>
+  </section>
+
+  <section class="sheet">
+    <div class="topline"><span>05</span><span>배포/운영 구조</span></div>
+    <h2>5. 배포 및 운영 구조</h2>
+
+    <div class="diagram-title">그림 4. 단일 서버 배포 기준</div>
+    <div class="deploy">
+      <div class="box dark">
+        <div class="title">외부 연동</div>
+        기술지원 게시판<br>
+        운영 담당자<br>
+        배치 실행자
+      </div>
+
+      <div class="server">
+        <h3>운영 서버</h3>
+        <div class="two">
+          <div class="box blue">
+            <div class="title">Node.js API</div>
+            <code>npm run server</code><br>
+            port 3000<br>
+            Express routes
+          </div>
+          <div class="box teal">
+            <div class="title">Python RAG Server</div>
+            <code>search_server.py</code><br>
+            port 8765<br>
+            model warmup
+          </div>
+        </div>
+        <div class="two" style="margin-top:8px">
+          <div class="box green">
+            <div class="title">Local Storage</div>
+            <code>data/raw</code><br>
+            <code>data/processed</code><br>
+            <code>data/chroma</code><br>
+            <code>data/answers</code>
+          </div>
+          <div class="box amber">
+            <div class="title">Batch / Tools</div>
+            <code>npm run collect</code><br>
+            <code>npm run classify</code><br>
+            <code>npm run index</code><br>
+            <code>tesseract</code>
+          </div>
+        </div>
+      </div>
+
+      <div class="box">
+        <div class="title">외부 서비스</div>
+        Gmail / Google OAuth<br>
+        W-Tech<br>
+        Confluence<br>
+        Codex Exec<br>
+        WebSquare MCP
+      </div>
+    </div>
+
+    <h3>운영 명령</h3>
+    <table>
+      <thead>
+        <tr><th>구분</th><th>명령</th><th>역할</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>API 서버</td><td><code>npm run server</code></td><td>답변/검색 API 제공</td></tr>
+        <tr><td>수집</td><td><code>npm run collect</code></td><td>원천 지식 데이터 갱신</td></tr>
+        <tr><td>분류</td><td><code>npm run classify</code></td><td>통합 Q&A 카테고리 분류</td></tr>
+        <tr><td>인덱싱</td><td><code>npm run index</code> / <code>npm run index:reset</code></td><td>ChromaDB 검색 인덱스 갱신</td></tr>
+        <tr><td>답변 테스트</td><td><code>node scripts/answer.js "질문"</code></td><td>CLI 기반 파이프라인 검증</td></tr>
+      </tbody>
+    </table>
+
+    <h3>보안 및 장애 대응</h3>
+    <div class="three">
+      <div class="box red">
+        <div class="title">인증/권한</div>
+        <code>/api/answer</code>는 API Key 인증을 적용합니다. 운영 설정은 <code>config/config.json</code>으로 분리합니다.
+      </div>
+      <div class="box red">
+        <div class="title">민감정보</div>
+        로그와 답변 저장 전에 <code>masking.js</code>가 고객명, 이메일, 전화번호 등 민감 패턴을 제거합니다.
+      </div>
+      <div class="box red">
+        <div class="title">Fallback</div>
+        RAG 서버 장애 시 subprocess 검색으로 대체합니다. LLM 실패는 API 오류와 로그로 남깁니다.
+      </div>
+    </div>
+
+    <table>
+      <thead>
+        <tr><th>장애 시나리오</th><th>처리 방식</th><th>확인 위치</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>RAG 서버 미응답</td>
+          <td>파이프라인이 Python subprocess 검색으로 자동 대체</td>
+          <td>API 서버 로그, RAG 서버 로그</td>
+        </tr>
+        <tr>
+          <td>Codex Exec timeout / quota</td>
+          <td>답변 API 실패 응답 반환</td>
+          <td>서버 stderr, 운영 감시 로그</td>
+        </tr>
+        <tr>
+          <td>OCR 실패</td>
+          <td>첨부 컨텍스트 없이 RAG/MCP 중심 답변 생성</td>
+          <td>파이프라인 attachment summary</td>
+        </tr>
+        <tr>
+          <td>미검증 API명 발견</td>
+          <td>1회 재생성 후 남은 항목은 경고로 표시</td>
+          <td><code>apiVerifier.js</code> 결과</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <div class="footer">
+      본 문서는 현재 구현 기준으로 작성했습니다. 계정, 내부 URL, API Key 등 보안 정보는 포함하지 않았습니다.
+    </div>
+  </section>
+</main>
+</body>
+</html>
