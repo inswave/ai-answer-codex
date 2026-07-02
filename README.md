@@ -382,3 +382,4 @@ cp scripts/watchdog.conf.example scripts/watchdog.conf   # WEBHOOK="..." 입력
 - **버전 검증** — 엔진 파일명 네이밍 규칙(`poi4`=POI 4.x 등)에 따라 실제 릴리즈 버전인지 확인
 - **개인정보** — 이름·이메일·회사명·프로젝트명 절대 포함 금지 (`src/utils/masking.js`)
 ```
+# ai-answer-codex
