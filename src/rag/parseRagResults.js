@@ -1,7 +1,7 @@
 const { maskSensitiveInfo } = require('../utils/masking');
 
 const DEFAULT_MIN_MATCH = 45;
-const MAX_CONTEXT_CHARS_PER_CASE = 1200;
+const MAX_CONTEXT_CHARS_PER_CASE = 2000;
 
 /**
  * Python searcher.py 출력 파싱 공용 모듈
@@ -35,7 +35,7 @@ function parseRagResults(output) {
 
     for (const line of lines) {
       const trimmed = line.trim();
-      if (trimmed.startsWith('질문:')) {
+      if (trimmed.startsWith('질문:') && !title) {
         title = trimmed.replace('질문:', '').trim();
       } else if (trimmed.startsWith('URL:')) {
         url = trimmed.replace('URL:', '').trim();

@@ -273,7 +273,7 @@ def render_cli_output(result):
         b = r.get("bm25_score", 0)
         meta = r["metadata"]
         lines.append(f"#{r['rank']} [최종: {r['score']:.4f} | 벡터: {v:.4f} | BM25: {b:.4f}] {meta.get('source', '')}")
-        lines.append(f"  질문: {meta.get('question', '')[:100]}")
+        lines.append(f"  질문: {meta.get('question', '')[:300]}")
         url = meta.get("url", "")
         if url:
             lines.append(f"  URL: {url}")
@@ -285,7 +285,7 @@ def render_cli_output(result):
             lines.append(f"  Attachments: {attachments_json}")
         doc = r.get("document", "")
         if doc:
-            lines.append(f"  답변: {doc[:500]}")
+            lines.append(f"  답변: {doc[:MAX_CONTEXT_LENGTH]}")
         lines.append("")
 
     return "\n".join(lines)
