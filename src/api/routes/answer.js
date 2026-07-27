@@ -63,6 +63,12 @@ function buildVisibleSampleFiles(query, cases) {
   return mergeSampleFiles(findSampleFiles(query, cases), toSampleFiles(cases), 2);
 }
 
+// [2026-07-27] AI 생성 검증 샘플(pipeline.generatedSample)을 기존 샘플 링크 목록 맨 앞에 합류.
+//   동일 스키마(sampleFiles)라 wtech UI 변경 없이 다운로드 링크로 노출된다.
+function withGeneratedSample(generatedSample, sampleFiles) {
+  return generatedSample ? [generatedSample, ...sampleFiles] : sampleFiles;
+}
+
 // POST /api/answer — 통일 스펙
 router.post('/', async (req, res) => {
   // query 우선, question은 하위 호환
@@ -89,7 +95,7 @@ router.post('/', async (req, res) => {
       answer: result.answer || '',
       confidence: calculateConfidence(cases),
       sources: toVisibleSources(query, cases),
-      sampleFiles: buildVisibleSampleFiles(query, cases),
+      sampleFiles: withGeneratedSample(result.generatedSample, buildVisibleSampleFiles(query, cases)),
       mcp: {
         enabled: !!result.mcpContext?.enabled,
         available: !!result.mcpContext?.available,
@@ -187,7 +193,7 @@ router.post('/stream', async (req, res) => {
       answer: result.answer || '',
       confidence: calculateConfidence(cases),
       sources: toVisibleSources(query, cases),
-      sampleFiles: buildVisibleSampleFiles(query, cases),
+      sampleFiles: withGeneratedSample(result.generatedSample, buildVisibleSampleFiles(query, cases)),
       mcp: {
         enabled: !!result.mcpContext?.enabled,
         available: !!result.mcpContext?.available,

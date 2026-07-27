@@ -15,6 +15,13 @@ const FILENAME_PATTERN = /[^\s"'<>|\\/:*?]+?\.(?:zip|xml|xlsx?|pdf|docx?|pptx?|p
 
 const SECRET_KEY_PATTERN = /\b(api[_-]?key|token|password|passwd|pwd|client[_-]?secret|clientSecret|secret)\b\s*[:=]?\s*["']?[^"'\s,}]+["']?/gi;
 
+// WebSquare 라이선스 발급 메일의 LICENSE INFO 블록 대응.
+// 호스트명은 고객사 서버 식별 정보이므로 마스킹한다.
+const LICENSE_HOST_PATTERN = /((?:HOST\s*Name|HOSTNAME)\s*[:=]\s*)[^\r\n]+/gi;
+// 라이선스 키: 한 줄 전체가 base64 문자로만 이루어진 30자 이상 문자열 (숫자+영문 혼합 필수).
+// LICENSE INFO 블록 아래 3~4줄로 나뉘어 붙는 형태라 줄 단위로 매칭한다.
+const LICENSE_KEY_LINE_PATTERN = /^[ \t]*(?=[A-Za-z0-9+/=]*\d)(?=[A-Za-z0-9+/=]*[A-Za-z])[A-Za-z0-9+/]{30,}={0,2}[ \t]*(?=\r?$)/gm;
+
 const LINE_FIELD_PATTERNS = [
   {
     regex: /((?:회사명\s*\/\s*프로젝트명|회사명|프로젝트명|고객사|고객사명)\s*[:：]?\s*|(?:client|company|project)\s*[:：]\s*)([^\r\n]+)/gi,
@@ -43,6 +50,8 @@ function maskSensitiveInfo(text, options = {}) {
 
   let masked = text;
   masked = masked.replace(SECRET_KEY_PATTERN, (_, key) => `${key}: [비밀값]`);
+  masked = masked.replace(LICENSE_HOST_PATTERN, '$1[호스트명]');
+  masked = masked.replace(LICENSE_KEY_LINE_PATTERN, '[라이선스키]');
   masked = masked.replace(EMAIL_PATTERN, '[이메일]');
   for (const pattern of PHONE_PATTERNS) {
     masked = masked.replace(pattern, '[전화번호]');

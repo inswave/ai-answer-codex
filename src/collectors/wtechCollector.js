@@ -68,6 +68,8 @@ class WTechCollector {
       headless: 'new',
       defaultViewport: { width: 1400, height: 900 },
       args: ['--no-sandbox', '--disable-setuid-sandbox'],
+      // [2026-07-27] wtech 페이지가 느릴 때 CDP 기본 180s로는 evaluate가 ProtocolError로 죽음
+      protocolTimeout: 420000,
     });
     console.log('[W-Tech] 브라우저 초기화 완료');
   }

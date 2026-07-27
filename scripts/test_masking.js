@@ -32,6 +32,32 @@ const cases = [
     input: '성명 홍길동',
     expected: '성명 홍길동',
   },
+  {
+    // LICENSE INFO 블록: 호스트명 + base64 키 라인 마스킹
+    input:
+      '############### LICENSE INFO ####################\n' +
+      'HOST Name  : BJOELSPWS05\n' +
+      'CPU Number : 12\n' +
+      '#################################################\n' +
+      '\n' +
+      'J+DARODU5TDRVUUZRMkZFNUMyO0MyTDk=\n' +
+      'NMUaYrgyejRjmhOAETQksRHwyMVnAZFdAvwjo+AsUlT8bSLSL0g0nVo8ioajhFhOjuD0pAJ\n' +
+      '1K4i3IUp36PERgdlD5TrVrpamBEszIRWE/exen+wLDGxyx1LeYoB',
+    expected:
+      '############### LICENSE INFO ####################\n' +
+      'HOST Name  : [호스트명]\n' +
+      'CPU Number : 12\n' +
+      '#################################################\n' +
+      '\n' +
+      '[라이선스키]\n' +
+      '[라이선스키]\n' +
+      '[라이선스키]',
+  },
+  {
+    // 숫자 없는 긴 영문 라인, 문장 속 base64 조각은 마스킹하지 않음
+    input: 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\n키값은 J+DARODU5TDRVUUZRMkZFNUMyO0MyTDk= 입니다',
+    expected: 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\n키값은 J+DARODU5TDRVUUZRMkZFNUMyO0MyTDk= 입니다',
+  },
 ];
 
 for (const { input, expected } of cases) {

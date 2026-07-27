@@ -120,6 +120,10 @@
     "confidenceThreshold": 0.6,
     "maxRefinementSearches": 2
   },
+  "sampleGen": {
+    "enabled": false,
+    "maxWaitMs": 180000
+  },
   "api": {
     "port": 3000,
     "apiKey": ""

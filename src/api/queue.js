@@ -65,6 +65,19 @@ function updateStatus(id, status) {
 }
 
 /**
+ * 샘플 XML 첨부 정보 갱신 (비동기 샘플 생성 완료/실패 시 파이프라인이 호출)
+ * sample: { status: 'generating'|'attached'|'failed', component, xmlPath, attempts, reason }
+ */
+function attachSample(id, sample) {
+  const queue = readQueue();
+  const item = queue.find(q => q.id === id);
+  if (!item) return null;
+  item.sample = { ...(item.sample || {}), ...sample, updatedAt: new Date().toISOString() };
+  writeQueue(queue);
+  return item;
+}
+
+/**
  * 답변 내용 수정
  */
 function updateAnswer(id, answer) {
@@ -93,4 +106,4 @@ function getById(id) {
   return readQueue().find(q => q.id === id) || null;
 }
 
-module.exports = { addToQueue, updateStatus, updateAnswer, listQueue, getById, readQueue };
+module.exports = { addToQueue, updateStatus, updateAnswer, attachSample, listQueue, getById, readQueue };

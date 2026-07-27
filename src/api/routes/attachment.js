@@ -24,7 +24,8 @@ const MAX_SIZE = 50 * 1024 * 1024; // 50 MB
 const BLOCKED_EXT = new Set([
   '.exe', '.bat', '.cmd', '.sh', '.ps1', '.msi', '.scr', '.com', '.vbs', '.dll',
 ]);
-const ALLOWED_DIR_PREFIXES = ['dev-guide-sample/'];
+// generated-samples/: AI 생성 검증 샘플 (sampleGenerator.publishSample가 날짜 폴더로 저장)
+const ALLOWED_DIR_PREFIXES = ['dev-guide-sample/', 'generated-samples/'];
 
 function normalizeDir(dir) {
   return String(dir || '').replace(/\\/g, '/').replace(/^\/+/, '');

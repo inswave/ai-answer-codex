@@ -11,7 +11,8 @@ const path = require('path');
 const Classifier = require('../classifier/classifier');
 const AnswerGenerator = require('./answerGenerator');
 const ApiVerifier = require('./apiVerifier');
-const { addToQueue } = require('../api/queue');
+const { addToQueue, attachSample } = require('../api/queue');
+const { generateSample, publishSample, detectSampleTarget } = require('./sampleGenerator');
 const { parseRagResults, buildRagContext } = require('../rag/parseRagResults');
 const { maskSensitiveInfo } = require('../utils/masking');
 const {
@@ -253,6 +254,10 @@ class AnswerPipeline {
       };
     }
 
+    // [2026-07-27] 샘플 XML 생성을 RAG/답변 생성과 병렬로 시작 (codex 1~3분이라 순차로 붙이면 응답이 배로 느려짐).
+    //   답변 완성 후 maxWaitMs까지만 기다렸다가 응답의 sampleFiles에 합류시키고, 늦으면 검수 큐에만 첨부.
+    const sampleTask = this._startSampleGeneration(safeQuestion);
+
     const __tRag = Date.now();
     const ragResult = await this._searchRAGMultiStep(safeQuestion, options);
     const safeRagContext = maskSensitiveInfo(ragResult.context);
@@ -339,8 +344,9 @@ class AnswerPipeline {
       console.log(`[Pipeline] answer saved: ${savedPath}`);
     }
 
+    let queueItem = null;
     try {
-      const queueItem = addToQueue({
+      queueItem = addToQueue({
         question: safeQuestion,
         answer: result.answer,
         classification,
@@ -351,6 +357,8 @@ class AnswerPipeline {
     } catch (err) {
       console.warn('[Pipeline] queue add failed:', err.message);
     }
+
+    const generatedSample = await this._settleSample(sampleTask, queueItem);
 
     const response = {
       question: safeQuestion,
@@ -371,6 +379,7 @@ class AnswerPipeline {
       needsHumanReview: answerPolicy.needsHumanReview,
       reviewReasons: answerPolicy.reviewReasons,
       requiredInfo: answerPolicy.requiredInfo,
+      generatedSample,
       savedPath,
     };
 
@@ -653,6 +662,93 @@ class AnswerPipeline {
       refinementUsed: true,
       refinementCandidates: candidates,
     };
+  }
+
+  /**
+   * [2026-07-27] 샘플 XML 자동 생성 시작 (RAG/답변 생성과 병렬 실행).
+   *
+   * - config.sampleGen.enabled=true일 때만 동작 (기본 꺼짐 — 운영 동작 불변)
+   * - 적합 판정: 문의에서 컴포넌트 검출 + 사용법/구현/재현 의도 키워드 (detectSampleTarget)
+   * - 반환: { component, promise } 또는 null. promise는 reject하지 않는다 (실패는 ok:false).
+   */
+  _startSampleGeneration(question) {
+    const cfg = loadConfig().sampleGen || {};
+    if (!cfg.enabled) return null;
+
+    const target = detectSampleTarget(question);
+    if (!target.eligible) {
+      console.log(`[Pipeline] sample skip: ${target.reason}`);
+      return null;
+    }
+
+    console.log(`[Pipeline] sample generation start (parallel): ${target.component} (${target.reason})`);
+    const scenario = `다음 고객 문의를 재현/확인할 수 있는 최소 샘플:\n${question.slice(0, 1500)}`;
+    const promise = generateSample(scenario, target.component, {
+      log: (msg) => console.log(`[Pipeline:sample] ${msg}`),
+    }).catch((err) => {
+      console.warn(`[Pipeline] sample generation error: ${err.message}`);
+      return { ok: false, xmlPath: null, attempts: 0, excluded: [], error: err.message };
+    });
+
+    return { component: target.component, promise };
+  }
+
+  /**
+   * 샘플 생성 마무리: 답변 완성 후 maxWaitMs까지만 대기.
+   *
+   * - 제한 시간 내 검증 통과 → data/raw/generated-samples/로 발행하고 sampleFile 객체 반환
+   *   (→ /api/answer 응답의 sampleFiles에 합류, 고객 답변에 자동 첨부. UI 변경 불필요)
+   * - 늦거나 실패 → null 반환. 생성은 백그라운드로 계속되고 완료 시 검수 큐에만 첨부 (수동 첨부 폴백).
+   * - 어느 경우든 검수 큐 항목의 sample 필드로 상태 추적.
+   */
+  async _settleSample(sampleTask, queueItem) {
+    if (!sampleTask) return null;
+    const cfg = loadConfig().sampleGen || {};
+    const maxWaitMs = cfg.maxWaitMs ?? 180000;
+    const queueId = queueItem?.id || null;
+
+    if (queueId) attachSample(queueId, { status: 'generating', component: sampleTask.component });
+
+    const finalize = (result) => {
+      if (!queueId) return;
+      attachSample(queueId, {
+        status: result.ok ? 'attached' : 'failed',
+        component: sampleTask.component,
+        xmlPath: result.xmlPath,
+        attempts: result.attempts,
+        excluded: result.excluded,
+        reason: result.error,
+      });
+    };
+
+    const result = await Promise.race([
+      sampleTask.promise,
+      new Promise((r) => setTimeout(r, maxWaitMs, null)),
+    ]);
+
+    if (result === null) {
+      console.log(`[Pipeline] sample not ready in ${maxWaitMs}ms → 응답 제외, 큐 첨부로 전환`);
+      sampleTask.promise.then(finalize);
+      return null;
+    }
+
+    finalize(result);
+    if (!result.ok) {
+      console.log(`[Pipeline] sample failed (${result.attempts}회 시도) → 응답 제외`);
+      return null;
+    }
+
+    try {
+      const sampleFile = publishSample(result.xmlPath, {
+        component: sampleTask.component,
+        id: queueId,
+      });
+      console.log(`[Pipeline] sample published: ${sampleFile.filename} (${result.attempts}회 시도)`);
+      return sampleFile;
+    } catch (err) {
+      console.warn(`[Pipeline] sample publish failed: ${err.message}`);
+      return null;
+    }
   }
 
   /**
